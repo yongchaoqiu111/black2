@@ -1,0 +1,56 @@
+{
+  "products": [
+    {
+      "id": "prod_kira_001",
+      "title": "Kira Official - 时尚写真集 Vol.1",
+      "description": "精选 Kira Official 高质量写真照片集，包含60+张精美图片，适合个人收藏、设计参考、灵感素材。\n\n✨ 内容亮点：\n- 60+ 张高清写真照片\n- 多种风格：日常、时尚、艺术\n- 高分辨率，适合打印和展示\n- 独家收集，市面罕见\n\n📦 文件格式：JPG/PNG\n💾 总大小：约 8MB\n🎯 适用场景：个人欣赏、设计参考、社交媒体素材",
+      "category": "digital_art",
+      "price": 9.99,
+      "currency": "USDT",
+      "media": [
+        "/assets/instagram/kira/photo1.jpg",
+        "/assets/instagram/kira/photo2.jpg",
+        "/assets/instagram/kira/photo3.jpg"
+      ],
+      "tags": ["写真", "摄影", "时尚", "艺术", "Kira"],
+      "stock": 999,
+      "deliveryType": "cloud_link",
+      "createdAt": "2026-04-14T15:30:00Z",
+      "status": "active"
+    },
+    {
+      "id": "prod_kira_002",
+      "title": "Kira Official - 短视频合集 Pack",
+      "description": "Kira Official 精彩短视频合集，包含20+个优质视频片段，适合视频剪辑、素材库、创意灵感。\n\n🎬 内容亮点：\n- 20+ 个短视频片段\n- 时长：5秒-30秒不等\n- 高清画质，流畅播放\n- 多场景：日常、舞蹈、生活\n\n📦 文件格式：MP4\n💾 总大小：约 15MB\n🎯 适用场景：视频剪辑素材、社交媒体、创意项目",
+      "category": "video_content",
+      "price": 14.99,
+      "currency": "USDT",
+      "media": [
+        "/assets/instagram/kira/video1.mp4",
+        "/assets/instagram/kira/video2.mp4"
+      ],
+      "tags": ["短视频", "视频素材", "Kira", "剪辑", "创意"],
+      "stock": 999,
+      "deliveryType": "cloud_link",
+      "createdAt": "2026-04-14T15:35:00Z",
+      "status": "active"
+    },
+    {
+      "id": "prod_kira_003",
+      "title": "Kira Official - 完整素材大礼包",
+      "description": "Kira Official 完整素材包，包含所有图片和视频，超值合集！\n\n🎁 内容包含：\n- 60+ 张高清写真照片\n- 20+ 个精彩短视频\n- 独家幕后花絮\n- 高清原图/原视频\n\n📦 文件格式：JPG/PNG/MP4\n💾 总大小：约 25MB\n🎯 适用场景：完整收藏、商业授权、素材库建设\n\n⭐ 限时优惠：比单独购买节省 40%",
+      "category": "bundle",
+      "price": 19.99,
+      "currency": "USDT",
+      "originalPrice": 34.98,
+      "media": [
+        "/assets/instagram/kira/bundle_cover.jpg"
+      ],
+      "tags": ["大礼包", "合集", "超值", "Kira", "完整"],
+      "stock": 999,
+      "deliveryType": "cloud_link",
+      "createdAt": "2026-04-14T15:40:00Z",
+      "status": "active"
+    }
+  ]
+}

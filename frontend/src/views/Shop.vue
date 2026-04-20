@@ -1,0 +1,121 @@
+<template>
+  <div class="min-h-screen bg-gray-50">
+    <!-- Header -->
+    <div class="bg-white shadow-sm">
+      <div class="max-w-7xl mx-auto px-4 py-6">
+        <h1 class="text-3xl font-bold text-gray-900">Shop</h1>
+        <p class="text-gray-600 mt-2">Browse and purchase AI products</p>
+      </div>
+    </div>
+
+    <!-- Product Grid -->
+    <div class="max-w-7xl mx-auto px-4 py-8">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div 
+          v-for="product in products" 
+          :key="product.id"
+          @click="goToProduct(product.id)"
+          class="bg-white rounded-lg shadow-md overflow-hidden cursor-pointer hover:shadow-xl transition-shadow"
+        >
+          <!-- Product Image -->
+          <div class="h-48 bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center">
+            <i class="fa-solid fa-box text-white text-6xl"></i>
+          </div>
+          
+          <!-- Product Info -->
+          <div class="p-4">
+            <h3 class="font-semibold text-lg text-gray-900 mb-2">{{ product.name }}</h3>
+            <p class="text-gray-600 text-sm mb-3 line-clamp-2">{{ product.description }}</p>
+            
+            <div class="flex items-center justify-between">
+              <span class="text-2xl font-bold text-purple-600">${{ product.price }}</span>
+              <button class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
+                View Details
+              </button>
+            </div>
+            
+            <!-- Seller Info -->
+            <div class="mt-3 pt-3 border-t border-gray-200">
+              <div class="flex items-center text-sm text-gray-500">
+                <i class="fa-solid fa-user-circle mr-2"></i>
+                <span>{{ product.seller }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Empty State -->
+      <div v-if="products.length === 0" class="text-center py-16">
+        <i class="fa-solid fa-inbox text-6xl text-gray-300 mb-4"></i>
+        <p class="text-gray-500 text-lg">No products available</p>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
+
+// Sample products data
+const products = ref([
+  {
+    id: 1,
+    name: 'USDT AutoDrop AI',
+    description: '24/7 automated USDT red packet sender with smart anti-fraud protection',
+    price: 299,
+    seller: 'AI Team'
+  },
+  {
+    id: 2,
+    name: 'Social Media Automation Suite',
+    description: 'Automate posting across Facebook, Instagram, and TikTok',
+    price: 499,
+    seller: 'SocialAI'
+  },
+  {
+    id: 3,
+    name: 'China Social Media Suite',
+    description: 'All-in-one automation for Douyin, Kuaishou, and Xiaohongshu',
+    price: 1999,
+    seller: 'SocialAI'
+  },
+  {
+    id: 4,
+    name: 'AI News Intelligence',
+    description: 'Real-time news aggregation and analysis powered by AI',
+    price: 99,
+    seller: 'NewsAI'
+  },
+  {
+    id: 5,
+    name: 'Crypto Trading Bot',
+    description: 'Advanced algorithmic trading bot for cryptocurrency markets',
+    price: 899,
+    seller: 'TradeAI'
+  },
+  {
+    id: 6,
+    name: 'Content Generator Pro',
+    description: 'Generate high-quality articles, blogs, and social media posts',
+    price: 199,
+    seller: 'WriteAI'
+  }
+])
+
+const goToProduct = (id) => {
+  router.push(`/product/${id}`)
+}
+</script>
+
+<style scoped>
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+</style>
