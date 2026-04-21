@@ -1257,3 +1257,77 @@ async def get_protocol_info() -> Dict[str, Any]:
         },
         "documentation": "https://github.com/yongchaoqiu111/black2/docs/WHITEPAPER.md"
     }
+
+
+# --- Sandbox Testing API ---
+
+class SandboxTestRequest(BaseModel):
+    dispute_id: str
+    product_file: str
+    contract_metrics: List[Dict[str, Any]]
+
+
+class SandboxTestResponse(BaseModel):
+    test_id: str
+    overall_pass_rate: float
+    metrics_tested: int
+    execution_time_seconds: float
+    environment: str
+
+
+@router.post("/api/v1/arbitration/sandbox-test", response_model=SandboxTestResponse)
+async def run_sandbox_test(request: SandboxTestRequest) -> SandboxTestResponse:
+    """
+    Execute automated sandbox tests for dispute resolution.
+    
+    Tests product functionality against quantifiable metrics defined in contract.
+    Uses isolated environment (Docker if available, otherwise local).
+    
+    **Use Cases:**
+    - Automated dispute resolution
+    - Product quality verification
+    - Performance benchmarking
+    """
+    try:
+        # Execute sandbox tests
+        test_results = await arbitration_engine.execute_sandbox_tests(
+            dispute_id=request.dispute_id,
+            product_file=request.product_file,
+            contract_metrics=request.contract_metrics
+        )
+        
+        return SandboxTestResponse(
+            test_id=test_results["test_id"],
+            overall_pass_rate=test_results["overall_pass_rate"],
+            metrics_tested=test_results["metrics_tested"],
+            execution_time_seconds=test_results["execution_time_seconds"],
+            environment=test_results["environment"]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/v1/arbitration/{dispute_id}/test-report")
+async def get_test_report(dispute_id: str) -> Dict[str, Any]:
+    """
+    Get human-readable test report for a dispute.
+    
+    Returns formatted test results with pass/fail status for each metric.
+    """
+    try:
+        dispute = arbitration_engine.evidence_store.get(dispute_id)
+        if not dispute:
+            raise HTTPException(status_code=404, detail="Dispute not found")
+        
+        if "test_report" not in dispute:
+            raise HTTPException(status_code=404, detail="Test report not available")
+        
+        return {
+            "dispute_id": dispute_id,
+            "report": dispute["test_report"],
+            "test_results": dispute.get("test_results")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

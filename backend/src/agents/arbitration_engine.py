@@ -206,6 +206,42 @@ class ArbitrationEngine:
         # Execute ruling
         await self._execute_ruling(dispute_id, ruling)
     
+    async def execute_sandbox_tests(
+        self,
+        dispute_id: str,
+        product_file: str,
+        contract_metrics: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Execute automated sandbox tests for dispute resolution.
+        
+        Args:
+            dispute_id: The dispute case ID
+            product_file: Path to the product file to test
+            contract_metrics: Quantifiable metrics from contract
+            
+        Returns:
+            Test results with pass/fail status
+        """
+        if dispute_id not in self.evidence_store:
+            raise ValueError(f"Dispute {dispute_id} not found")
+        
+        # Run sandbox tests
+        test_results = await sandbox_tester.run_sandbox_tests(
+            product_file=product_file,
+            contract_metrics=contract_metrics
+        )
+        
+        # Store test results
+        self.evidence_store[dispute_id]["test_results"] = test_results
+        self.evidence_store[dispute_id]["status"] = "testing_completed"
+        
+        # Generate human-readable report
+        report = sandbox_tester.generate_test_report(test_results)
+        self.evidence_store[dispute_id]["test_report"] = report
+        
+        return test_results
+    
     def _detect_effect_promise_violation(self, dispute: Dict[str, Any]) -> bool:
         """
         Detect if the dispute involves an effect promise violation.
@@ -297,64 +333,8 @@ class ArbitrationEngine:
         return list(self.evidence_store.values())
 
 
+# Import sandbox tester
+from src.agents.sandbox_tester import sandbox_tester, SandboxTester
+
 # Singleton instance
 arbitration_engine = ArbitrationEngine()
-
-
-# ============================================
-# Sandbox Testing Framework (Placeholder)
-# ============================================
-
-class SandboxTester:
-    """
-    Automated testing framework for validating product functionality.
-    
-    TODO: Implement actual sandbox environment using:
-    - Docker containers for isolation
-    - pytest/unittest for test execution
-    - Performance monitoring tools
-    - Security scanning tools
-    """
-    
-    def __init__(self):
-        self.sandbox_env = None
-    
-    async def deploy_product(self, product_file: str, file_hash: str) -> bool:
-        """Deploy product in isolated sandbox environment."""
-        # TODO: Implement Docker container deployment
-        # TODO: Verify file hash matches
-        print(f"Deploying product {file_hash} in sandbox...")
-        return True
-    
-    async def run_tests(self, test_cases: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Execute automated test cases."""
-        # TODO: Implement test execution
-        results = {
-            "total": len(test_cases),
-            "passed": 0,
-            "failed": 0,
-            "details": []
-        }
-        
-        for test in test_cases:
-            # Simulate test execution
-            passed = True  # Placeholder
-            results["details"].append({
-                "test_name": test["name"],
-                "result": "PASS" if passed else "FAIL"
-            })
-            if passed:
-                results["passed"] += 1
-            else:
-                results["failed"] += 1
-        
-        return results
-    
-    async def cleanup(self):
-        """Clean up sandbox environment."""
-        # TODO: Destroy Docker containers
-        print("Cleaning up sandbox...")
-
-
-# Export main engine
-__all__ = ["arbitration_engine", "ArbitrationEngine", "SandboxTester"]
