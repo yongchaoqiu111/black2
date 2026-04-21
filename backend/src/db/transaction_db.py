@@ -190,6 +190,30 @@ async def init_db():
             )
         ''')
         
+        # Create users table (for reputation system)
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                address TEXT UNIQUE NOT NULL,
+                reputation_score INTEGER DEFAULT 100,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create reputation_history table
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS reputation_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_address TEXT NOT NULL,
+                score_change INTEGER NOT NULL,
+                new_score INTEGER NOT NULL,
+                reason TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_address) REFERENCES users(address)
+            )
+        ''')
+        
         await db.commit()
 
 
@@ -1001,3 +1025,182 @@ async def get_contract(contract_id: str) -> Optional[Dict[str, Any]]:
         
         columns = [description[0] for description in cursor.description]
         return dict(zip(columns, row))
+
+
+# ===== Reputation System Functions =====
+
+async def update_reputation_score(
+    address: str,
+    score_change: int,
+    reason: str = ""
+) -> Dict[str, Any]:
+    """
+    Update user's reputation score.
+    
+    Args:
+        address: User wallet address
+        score_change: Points to add (positive) or subtract (negative)
+        reason: Reason for the change
+        
+    Returns:
+        Updated reputation info
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Get current reputation
+        cursor = await db.execute(
+            'SELECT reputation_score FROM users WHERE address = ?',
+            (address,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            # Create user if not exists
+            current_score = 100
+            await db.execute(
+                'INSERT INTO users (address, reputation_score) VALUES (?, ?)',
+                (address, current_score)
+            )
+        else:
+            current_score = row[0]
+        
+        # Calculate new score (clamp between 0-100)
+        new_score = max(0, min(100, current_score + score_change))
+        
+        # Update score
+        await db.execute(
+            'UPDATE users SET reputation_score = ?, updated_at = CURRENT_TIMESTAMP WHERE address = ?',
+            (new_score, address)
+        )
+        
+        # Record reputation history
+        await db.execute('''
+            INSERT INTO reputation_history 
+            (user_address, score_change, new_score, reason)
+            VALUES (?, ?, ?, ?)
+        ''', (address, score_change, new_score, reason))
+        
+        await db.commit()
+        
+        return {
+            "address": address,
+            "previous_score": current_score,
+            "score_change": score_change,
+            "new_score": new_score,
+            "reason": reason
+        }
+
+
+async def calculate_margin_percentage(reputation_score: int) -> float:
+    """
+    Calculate margin percentage based on reputation score.
+    Following Black2 Protocol Section 7.2.
+    
+    Args:
+        reputation_score: User's reputation score (0-100)
+        
+    Returns:
+        Margin percentage (5.0 - 20.0)
+    """
+    if reputation_score >= 90:
+        return 5.0
+    elif reputation_score >= 80:
+        return 10.0
+    elif reputation_score >= 70:
+        return 15.0
+    elif reputation_score >= 60:
+        return 20.0
+    else:
+        return 0.0  # Cannot publish
+
+
+async def get_user_reputation(address: str) -> Optional[Dict[str, Any]]:
+    """
+    Get user's current reputation info.
+    
+    Args:
+        address: User wallet address
+        
+    Returns:
+        User reputation data or None
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT address, reputation_score, created_at, updated_at FROM users WHERE address = ?',
+            (address,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        columns = [description[0] for description in cursor.description]
+        user_data = dict(zip(columns, row))
+        
+        # Calculate margin percentage
+        margin_pct = await calculate_margin_percentage(user_data['reputation_score'])
+        user_data['margin_percentage'] = margin_pct
+        user_data['can_publish'] = user_data['reputation_score'] >= 60
+        
+        return user_data
+
+
+async def apply_transaction_reputation_update(
+    tx_id: str,
+    status: str,
+    dispute_result: Optional[Dict[str, Any]] = None
+):
+    """
+    Automatically update reputation scores after transaction completion.
+    Following Black2 Protocol Section 7.1.
+    
+    Args:
+        tx_id: Transaction ID
+        status: Transaction status (completed, refunded, disputed)
+        dispute_result: Optional dispute resolution result
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Get transaction details
+        cursor = await db.execute(
+            'SELECT buyer_address, seller_address FROM transactions WHERE tx_id = ?',
+            (tx_id,)
+        )
+        tx = await cursor.fetchone()
+        
+        if not tx:
+            return
+        
+        buyer_address, seller_address = tx
+        
+        # Update seller reputation based on outcome
+        if status == 'completed':
+            # Successful transaction: +1 point
+            await update_reputation_score(
+                seller_address,
+                score_change=1,
+                reason=f"Successful transaction {tx_id}"
+            )
+        elif status == 'refunded':
+            # Refund: check if dispute
+            if dispute_result:
+                verdict = dispute_result.get('verdict', '')
+                if verdict == 'seller_violation':
+                    # Seller violation: -20 points
+                    await update_reputation_score(
+                        seller_address,
+                        score_change=-20,
+                        reason=f"Dispute lost: {dispute_result.get('reason', '')}"
+                    )
+                elif verdict == 'buyer_wins':
+                    # Buyer wins: -15 points
+                    await update_reputation_score(
+                        seller_address,
+                        score_change=-15,
+                        reason=f"Dispute resolved against seller"
+                    )
+            else:
+                # Voluntary refund: -5 points
+                await update_reputation_score(
+                    seller_address,
+                    score_change=-5,
+                    reason=f"Voluntary refund for transaction {tx_id}"
+                )

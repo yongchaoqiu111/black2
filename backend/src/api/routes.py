@@ -33,7 +33,9 @@ from src.db.transaction_db import (
     create_contract,
     update_contract_anchor,
     update_contract_status,
-    get_contract
+    get_contract,
+    apply_transaction_reputation_update,
+    get_user_reputation
 )
 from src.crypto.hash_service import sign_transaction, verify_transaction, sha256_hash, generate_keypair, sign_message, verify_signature
 from src.agents.arbitration_engine import arbitration_engine
@@ -256,21 +258,102 @@ async def verify_transaction_endpoint(tx_id: str, verification: TransactionVerif
 
 
 @router.put("/api/v1/transactions/{tx_id}/status")
-async def update_transaction_status_endpoint(tx_id: str, update: TransactionStatusUpdate) -> Dict[str, bool]:
+async def update_transaction_status_endpoint(tx_id: str, update: TransactionStatusUpdate) -> Dict[str, Any]:
     """
-    Update transaction status.
+    Update transaction status with automatic reputation and referral settlement.
+    
+    When status changes to 'completed':
+    - Settles pending referral rewards
+    - Updates seller reputation (+1 point)
+    
+    When status changes to 'refunded':
+    - Cancels pending referral rewards
+    - Updates seller reputation (-5 to -20 points based on reason)
     
     - **status**: New status for the transaction
     - **file_hash**: Optional file hash to update
     """
+    # Get current transaction
+    tx = await get_transaction(tx_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    old_status = tx.get('status')
+    new_status = update.status
+    
+    # Update status
     success = await update_transaction_status(
         tx_id=tx_id,
-        status=update.status,
+        status=new_status,
         file_hash=update.file_hash
     )
     if not success:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    return {"updated": success}
+    
+    result = {"updated": True, "old_status": old_status, "new_status": new_status}
+    
+    # Handle automatic actions based on status change
+    if new_status == 'completed' and old_status != 'completed':
+        # 1. Settle referral rewards
+        try:
+            await settle_referral_rewards(tx_id)
+            result["referral_settled"] = True
+        except Exception as e:
+            result["referral_settled"] = False
+            result["referral_error"] = str(e)
+        
+        # 2. Update seller reputation
+        try:
+            await apply_transaction_reputation_update(tx_id, 'completed')
+            seller_address = tx.get('to_address', '')
+            if seller_address:
+                seller_rep = await get_user_reputation(seller_address)
+                result["seller_reputation"] = seller_rep
+        except Exception as e:
+            result["reputation_error"] = str(e)
+    
+    elif new_status in ['refunded', 'cancelled'] and old_status not in ['refunded', 'cancelled']:
+        # 1. Cancel referral rewards
+        try:
+            await cancel_referral_rewards(tx_id)
+            result["referral_cancelled"] = True
+        except Exception as e:
+            result["referral_cancelled"] = False
+            result["referral_error"] = str(e)
+        
+        # 2. Update seller reputation (negative)
+        try:
+            await apply_transaction_reputation_update(tx_id, 'refunded')
+            seller_address = tx.get('to_address', '')
+            if seller_address:
+                seller_rep = await get_user_reputation(seller_address)
+                result["seller_reputation"] = seller_rep
+        except Exception as e:
+            result["reputation_error"] = str(e)
+    
+    return result
+
+
+@router.get("/api/v1/reputation/{address}")
+async def get_reputation(address: str) -> Dict[str, Any]:
+    """
+    Get user's reputation score and margin percentage.
+    
+    Returns current reputation, margin percentage, and publishing eligibility.
+    """
+    rep = await get_user_reputation(address)
+    
+    if not rep:
+        # Return default values for new users
+        return {
+            "address": address,
+            "reputation_score": 100,
+            "margin_percentage": 5.0,
+            "can_publish": True,
+            "message": "New user with default reputation"
+        }
+    
+    return rep
 
 
 @router.get("/api/v1/wallet/{address}", response_model=WalletResponse)
