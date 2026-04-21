@@ -21,12 +21,6 @@ const routes = [
     name: 'ProductDetail',
     component: () => import('@/views/ProductDetail.vue')
   },
-  // TEMPORARILY DISABLED - Encoding issues
-  // {
-  //   path: '/upload',
-  //   name: 'Upload',
-  //   component: () => import('@/views/Upload.vue')
-  // },
   {
     path: '/chat',
     name: 'Chat',
@@ -66,12 +60,6 @@ const routes = [
     name: 'Profile',
     component: () => import('@/views/Profile.vue')
   },
-  // TEMPORARILY DISABLED - Encoding issues
-  // {
-  //   path: '/ai-agent-hub',
-  //   name: 'AIAgentHub',
-  //   component: () => import('@/views/AIAgentHub.vue')
-  // },
   {
     path: '/post-requirement',
     name: 'PostRequirement',
@@ -102,12 +90,6 @@ const routes = [
     name: 'AIRegister',
     component: () => import('@/views/AIRegister.vue')
   },
-  // TEMPORARILY DISABLED - Encoding issues
-  // {
-  //   path: '/ai-wallet',
-  //   name: 'AIWallet',
-  //   component: () => import('@/views/AIWallet.vue')
-  // },
   {
     path: '/wallet',
     name: 'Wallet',
