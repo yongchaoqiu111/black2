@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api/v1'
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api/v1'
 
 // Create axios instance with default config
 const apiClient = axios.create({
@@ -138,20 +138,56 @@ export const ordersApi = {
 
 // Wallet API
 export const walletApi = {
-  getBalance() {
-    return apiClient.get('/wallet/balance')
+  // Human wallet
+  getHumanWallet(address) {
+    return apiClient.get(`/wallets/human/${address}`)
+  },
+  
+  // AI wallet
+  getAIWallet(address) {
+    return apiClient.get(`/wallets/ai/${address}`)
   },
   
   deposit(depositData) {
-    return apiClient.post('/wallet/deposit', depositData)
+    return apiClient.post('/deposits', depositData)
   },
   
   withdraw(withdrawData) {
-    return apiClient.post('/wallet/withdraw', withdrawData)
+    return apiClient.post('/withdrawals', withdrawData)
   },
   
   getTransactions(params = {}) {
-    return apiClient.get('/wallet/transactions', { params })
+    return apiClient.get('/transactions', { params })
+  }
+}
+
+// Transactions API (Black2 Protocol)
+export const transactionsApi = {
+  create(txData) {
+    return apiClient.post('/transactions', txData)
+  },
+  
+  getById(txId) {
+    return apiClient.get(`/transactions/${txId}`)
+  },
+  
+  updateStatus(txId, statusData) {
+    return apiClient.put(`/transactions/${txId}/status`, statusData)
+  },
+  
+  verifySignature(txId, verificationData) {
+    return apiClient.post(`/transactions/${txId}/verify`, verificationData)
+  },
+  
+  list(params = {}) {
+    return apiClient.get('/transactions', { params })
+  }
+}
+
+// Reputation API
+export const reputationApi = {
+  getReputation(address) {
+    return apiClient.get(`/reputation/${address}`)
   }
 }
 

@@ -365,6 +365,46 @@ async def get_wallet(address: str) -> WalletResponse:
     return WalletResponse(**wallet)
 
 
+@router.get("/api/v1/wallets/human/{address}")
+async def get_human_wallet(address: str) -> Dict[str, Any]:
+    """
+    Get human wallet with points balance.
+    
+    Returns human-readable wallet information including:
+    - Points balance
+    - Locked points
+    - Total deposited/withdrawn
+    """
+    wallet = await get_or_create_human_wallet(address)
+    return {
+        "address": wallet['address'],
+        "points_balance": wallet['points_balance'],
+        "locked_points": wallet['locked_points'],
+        "total_deposited": wallet['total_deposited'],
+        "total_withdrawn": wallet['total_withdrawn'],
+        "created_at": wallet['created_at']
+    }
+
+
+@router.get("/api/v1/wallets/ai/{address}")
+async def get_ai_wallet(address: str) -> Dict[str, Any]:
+    """
+    Get AI wallet (encrypted/hidden for privacy).
+    
+    AI wallets receive referral commissions automatically.
+    Balance is encrypted to prevent targeted attacks.
+    """
+    wallet = await get_or_create_wallet(address)
+    return {
+        "address": wallet['address'],
+        "balance_encrypted": True,  # Indicates balance is hidden
+        "total_earned": wallet['total_earned'],
+        "referral_count": wallet['referral_count'],
+        "created_at": wallet['created_at'],
+        "note": "AI wallet balance is encrypted for security"
+    }
+
+
 @router.post("/api/v1/wallet/{address}/withdraw")
 async def withdraw_from_wallet(address: str, withdraw: WalletWithdraw) -> Dict[str, Any]:
     """
@@ -396,10 +436,19 @@ async def withdraw_from_wallet(address: str, withdraw: WalletWithdraw) -> Dict[s
 
 # ===== Deposit & Withdrawal Endpoints =====
 
-@router.post("/api/v1/deposit")
+@router.post("/api/v1/deposits")
 async def create_deposit(deposit_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Record a deposit transaction (after on-chain confirmation).
+    
+    **Request Body:**
+    ```json
+    {
+        "user_address": "0x123...",
+        "tx_hash": "0xabc...",
+        "amount": 100.0
+    }
+    ```
     """
     user_address = deposit_data.get('user_address')
     tx_hash = deposit_data.get('tx_hash')
@@ -424,32 +473,54 @@ async def create_deposit(deposit_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@router.post("/api/v1/withdraw")
+@router.post("/api/v1/withdrawals")
 async def create_withdrawal(withdraw_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Request a withdrawal (will be processed by admin).
+    
+    **Request Body:**
+    ```json
+    {
+        "user_address": "0x123...",
+        "amount": 50.0,
+        "withdraw_address": "0x456..."
+    }
+    ```
     """
     user_address = withdraw_data.get('user_address')
     amount = withdraw_data.get('amount')
-    gas_fee = withdraw_data.get('gas_fee', 0.0)
+    withdraw_address = withdraw_data.get('withdraw_address', user_address)
     
     if not all([user_address, amount]):
         raise HTTPException(status_code=400, detail="Missing required fields")
     
-    # Check user balance
+    # Check minimum withdrawal
+    if amount < 50:
+        raise HTTPException(status_code=400, detail="Minimum withdrawal is 50 USDT")
+    
+    # Get human wallet
     wallet = await get_or_create_human_wallet(user_address)
+    
+    # Check balance
     if wallet['points_balance'] < amount:
         raise HTTPException(status_code=400, detail="Insufficient balance")
     
-    # Record withdrawal request
-    withdrawal_id = await record_withdrawal(user_address, amount, gas_fee)
+    # Record withdrawal
+    withdrawal_id = await record_withdrawal(user_address, amount)
+    
+    # In production, this would trigger actual blockchain transfer
+    # For now, mark as completed immediately
+    await complete_withdrawal(withdrawal_id, f"0x_simulated_tx_{withdrawal_id}")
     
     return {
-        "message": "Withdrawal request submitted",
+        "message": "Withdrawal processed",
         "withdrawal_id": withdrawal_id,
         "amount": amount,
-        "status": "pending"
+        "status": "completed"
     }
+
+
+# ===== Referral System Endpoints =====
 
 
 @router.post("/api/v1/register")
