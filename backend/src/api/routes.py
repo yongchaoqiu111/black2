@@ -46,6 +46,13 @@ from src.contract.templates import (
 )
 from src.anchor.github_anchor import GitHubAnchorService
 
+# Initialize GitHub Anchor Service
+try:
+    github_anchor = GitHubAnchorService()
+except ValueError:
+    # If no GitHub token, create a dummy instance for API docs
+    github_anchor = None
+
 router = APIRouter()
 
 
@@ -1329,5 +1336,155 @@ async def get_test_report(dispute_id: str) -> Dict[str, Any]:
         }
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Merkle Batch Anchoring API ---
+
+class BatchAnchorRequest(BaseModel):
+    transaction_hashes: List[str]
+    batch_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class BatchAnchorResponse(BaseModel):
+    batch_id: str
+    merkle_root: str
+    transaction_count: int
+    commit_url: str
+    anchor_timestamp: str
+    proof_available: bool
+
+
+class MerkleProofRequest(BaseModel):
+    transaction_hash: str
+    transaction_hashes: List[str]
+
+
+class MerkleProofResponse(BaseModel):
+    hash: str
+    proof_path: List[Dict[str, Any]]
+    merkle_root: str
+    position: int
+    total_transactions: int
+
+
+class VerifyProofRequest(BaseModel):
+    transaction_hash: str
+    proof: Dict[str, Any]
+
+
+class VerifyProofResponse(BaseModel):
+    valid: bool
+    message: str
+
+
+@router.post("/api/v1/anchor/batch", response_model=BatchAnchorResponse)
+async def anchor_batch(request: BatchAnchorRequest) -> BatchAnchorResponse:
+    """
+    Anchor multiple transaction hashes using Merkle root optimization.
+    
+    Following Black2 Protocol Section 4.3:
+    - Calculate Merkle root from all transaction hashes
+    - Submit single commit to GitHub with Merkle root and all hashes
+    - Reduces GitHub API calls by ~90% for large batches
+    
+    **Use Cases:**
+    - High-frequency trading platforms
+    - Batch settlement systems
+    - Cost optimization for anchoring
+    
+    **Example:**
+    ```json
+    {
+        "transaction_hashes": ["hash1", "hash2", "hash3", "hash4"],
+        "batch_id": "BATCH_20260421_001",
+        "metadata": {"platform": "my_exchange"}
+    }
+    ```
+    """
+    if not github_anchor:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub anchor service not configured (missing ANCHOR_GITHUB_TOKEN)"
+        )
+    
+    if len(request.transaction_hashes) == 0:
+        raise HTTPException(status_code=400, detail="At least one transaction hash required")
+    
+    try:
+        result = await github_anchor.anchor_batch_transactions(
+            transaction_hashes=request.transaction_hashes,
+            batch_id=request.batch_id,
+            metadata=request.metadata
+        )
+        
+        return BatchAnchorResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/v1/anchor/merkle-proof", response_model=MerkleProofResponse)
+async def generate_merkle_proof(request: MerkleProofRequest) -> MerkleProofResponse:
+    """
+    Generate Merkle proof for a specific transaction in a batch.
+    
+    Allows verification that a transaction was included in a batch
+    without revealing all other transactions.
+    
+    **Use Cases:**
+    - Privacy-preserving verification
+    - Selective disclosure
+    - Audit trails
+    """
+    if not github_anchor:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub anchor service not configured"
+        )
+    
+    try:
+        proof = github_anchor.generate_merkle_proof(
+            transaction_hash=request.transaction_hash,
+            transaction_hashes=request.transaction_hashes
+        )
+        
+        return MerkleProofResponse(**proof)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/api/v1/anchor/verify-proof", response_model=VerifyProofResponse)
+async def verify_merkle_proof(request: VerifyProofRequest) -> VerifyProofResponse:
+    """
+    Verify a Merkle proof.
+    
+    Confirms that a transaction hash is part of a batch
+    by verifying the proof path against the Merkle root.
+    
+    **Use Cases:**
+    - Transaction inclusion verification
+    - Audit compliance
+    - Dispute resolution
+    """
+    if not github_anchor:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub anchor service not configured"
+        )
+    
+    try:
+        is_valid = github_anchor.verify_merkle_proof(
+            transaction_hash=request.transaction_hash,
+            proof=request.proof
+        )
+        
+        return VerifyProofResponse(
+            valid=is_valid,
+            message="Proof verified successfully" if is_valid else "Invalid proof"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
