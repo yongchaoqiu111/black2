@@ -17,7 +17,8 @@ from typing import Optional
 from src.api.routes import router as api_router
 from src.db.transaction_db import init_db, get_transaction, update_transaction_status
 from src.agents.arbitrator import Arbitrator
-from src.anchor.anchor_service import AnchorService, AnchorScheduler
+from src.anchor.anchor_service import AnchorService
+from src.anchor.scheduler import AnchorScheduler
 from src.db.transaction_db import TransactionDB as CoreDB
 
 load_dotenv()
