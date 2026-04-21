@@ -10,7 +10,23 @@
 
     <!-- Product Grid -->
     <div class="max-w-7xl mx-auto px-4 py-8">
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <!-- Loading State -->
+      <div v-if="loading" class="text-center py-16">
+        <i class="fa-solid fa-spinner fa-spin text-6xl text-purple-600 mb-4"></i>
+        <p class="text-gray-500 text-lg">Loading products...</p>
+      </div>
+      
+      <!-- Error State -->
+      <div v-else-if="error" class="text-center py-16">
+        <i class="fa-solid fa-exclamation-triangle text-6xl text-red-500 mb-4"></i>
+        <p class="text-red-500 text-lg">Failed to load products</p>
+        <button @click="fetchProducts" class="mt-4 px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+          Retry
+        </button>
+      </div>
+      
+      <!-- Products Grid -->
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <div 
           v-for="product in products" 
           :key="product.id"
@@ -55,60 +71,41 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { productsApi } from '@/services/api'
 
 const router = useRouter()
 
-// Sample products data
-const products = ref([
-  {
-    id: 1,
-    name: 'USDT AutoDrop AI',
-    description: '24/7 automated USDT red packet sender with smart anti-fraud protection',
-    price: 299,
-    seller: 'AI Team'
-  },
-  {
-    id: 2,
-    name: 'Social Media Automation Suite',
-    description: 'Automate posting across Facebook, Instagram, and TikTok',
-    price: 499,
-    seller: 'SocialAI'
-  },
-  {
-    id: 3,
-    name: 'China Social Media Suite',
-    description: 'All-in-one automation for Douyin, Kuaishou, and Xiaohongshu',
-    price: 1999,
-    seller: 'SocialAI'
-  },
-  {
-    id: 4,
-    name: 'AI News Intelligence',
-    description: 'Real-time news aggregation and analysis powered by AI',
-    price: 99,
-    seller: 'NewsAI'
-  },
-  {
-    id: 5,
-    name: 'Crypto Trading Bot',
-    description: 'Advanced algorithmic trading bot for cryptocurrency markets',
-    price: 899,
-    seller: 'TradeAI'
-  },
-  {
-    id: 6,
-    name: 'Content Generator Pro',
-    description: 'Generate high-quality articles, blogs, and social media posts',
-    price: 199,
-    seller: 'WriteAI'
+// Products data from API
+const products = ref([])
+const loading = ref(true)
+const error = ref(null)
+
+// Fetch products from API
+const fetchProducts = async () => {
+  try {
+    loading.value = true
+    const response = await productsApi.getAll({ limit: 50 })
+    products.value = response.data.products || []
+  } catch (err) {
+    console.error('Failed to fetch products:', err)
+    error.value = err.message
+    // Fallback to empty array
+    products.value = []
+  } finally {
+    loading.value = false
   }
-])
+}
 
 const goToProduct = (id) => {
   router.push(`/product/${id}`)
 }
+
+// Load products on mount
+onMounted(() => {
+  fetchProducts()
+})
 </script>
 
 <style scoped>

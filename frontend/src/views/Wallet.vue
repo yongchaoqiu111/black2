@@ -270,20 +270,70 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useUserStore } from '@/stores/user'
+import { walletApi, transactionsApi } from '@/services/api'
 
 const userStore = useUserStore()
 
-// Balances
+// Wallet data
+const humanWallet = ref(null)
+const aiWallet = ref(null)
+const loading = ref(true)
+const error = ref(null)
+
+// Balances (from API)
 const balances = ref({
-  USDT_TRC20: 1250.50,
-  USDT_ERC20: 800.00
+  USDT_TRC20: 0,
+  USDT_ERC20: 0
 })
 
 const totalBalance = computed(() => {
   return balances.value.USDT_TRC20 + balances.value.USDT_ERC20
 })
+
+// Fetch wallet data
+const fetchWalletData = async () => {
+  try {
+    loading.value = true
+    const address = userStore.user?.address || userStore.user?.wallet_address
+    
+    if (!address) {
+      error.value = 'No wallet address found'
+      return
+    }
+    
+    // Fetch human wallet
+    const humanResponse = await walletApi.getHumanWallet(address)
+    humanWallet.value = humanResponse.data
+    
+    // Fetch AI wallet
+    const aiResponse = await walletApi.getAIWallet(address)
+    aiWallet.value = aiResponse.data
+    
+    // Update balances (for now, use points as USDT balance)
+    balances.value.USDT_TRC20 = humanWallet.value.points_balance || 0
+    balances.value.USDT_ERC20 = 0 // Can be extended for multi-network support
+    
+  } catch (err) {
+    console.error('Failed to fetch wallet data:', err)
+    error.value = err.message
+  } finally {
+    loading.value = false
+  }
+}
+
+// Fetch transactions
+const transactions = ref([])
+const fetchTransactions = async () => {
+  try {
+    const response = await transactionsApi.list({ limit: 50 })
+    transactions.value = response.data.transactions || []
+  } catch (err) {
+    console.error('Failed to fetch transactions:', err)
+    transactions.value = []
+  }
+}
 
 // Wallet addresses
 const walletAddresses = {
@@ -357,9 +407,37 @@ const copyAddress = () => {
   alert('Address copied to clipboard!')
 }
 
-const handleWithdraw = () => {
-  // TODO: Implement withdrawal logic
-  alert(`Withdrawal of ${withdrawAmount.value} USDT (${withdrawNetwork.value}) to ${withdrawAddress.value}`)
-  showWithdrawModal.value = false
+const handleWithdraw = async () => {
+  try {
+    const address = userStore.user?.address || userStore.user?.wallet_address
+    
+    if (!address) {
+      alert('No wallet address found')
+      return
+    }
+    
+    // Call withdrawal API
+    const response = await walletApi.withdraw({
+      user_address: address,
+      amount: withdrawAmount.value,
+      withdraw_address: withdrawAddress.value
+    })
+    
+    alert(`Withdrawal successful! ID: ${response.data.withdrawal_id}`)
+    showWithdrawModal.value = false
+    
+    // Refresh wallet data
+    await fetchWalletData()
+    await fetchTransactions()
+  } catch (err) {
+    console.error('Withdrawal failed:', err)
+    alert(`Withdrawal failed: ${err.response?.data?.detail || err.message}`)
+  }
 }
+
+// Load data on mount
+onMounted(() => {
+  fetchWalletData()
+  fetchTransactions()
+})
 </script>
