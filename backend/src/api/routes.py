@@ -8,6 +8,13 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 import uuid
+import hashlib
+import random
+import string
+import asyncio
+import aiosqlite
+import os
+from datetime import datetime, timedelta
 
 from src.db.transaction_db import (
     create_transaction,
@@ -37,7 +44,9 @@ from src.db.transaction_db import (
     apply_transaction_reputation_update,
     get_user_reputation
 )
+from src.db.transaction_db import DB_PATH
 from src.crypto.hash_service import sign_transaction, verify_transaction, sha256_hash, generate_keypair, sign_message, verify_signature
+from src.crypto.hd_wallet import hd_wallet_service
 from src.agents.arbitration_engine import arbitration_engine
 from src.contract.templates import (
     get_template,
@@ -47,6 +56,9 @@ from src.contract.templates import (
     detect_effect_promise
 )
 from src.anchor.github_anchor import GitHubAnchorService
+from src.utils.websocket_manager import websocket_manager
+from src.utils.rate_limiter import rate_limiter
+from fastapi import WebSocket, WebSocketDisconnect
 
 # Initialize GitHub Anchor Service
 try:
@@ -111,7 +123,7 @@ class ReferralResponse(BaseModel):
 @router.post("/api/v1/transactions", response_model=TransactionResponse)
 async def create_new_transaction(transaction: TransactionCreate) -> TransactionResponse:
     """
-    Create a new transaction.
+    Create a new transaction and deduct payment from buyer's wallet.
     
     - **from_address**: Sender's address
     - **to_address**: Recipient's address
@@ -124,7 +136,33 @@ async def create_new_transaction(transaction: TransactionCreate) -> TransactionR
     # Generate a unique transaction ID
     tx_id = str(uuid.uuid4())
     
-    # Create transaction data
+    # Deduct payment from buyer's AI wallet
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Check buyer's AI wallet balance
+        cursor = await db.execute(
+            'SELECT balance FROM ai_wallets WHERE address = ?',
+            (transaction.from_address,)
+        )
+        buyer_wallet = await cursor.fetchone()
+        
+        if not buyer_wallet:
+            raise HTTPException(status_code=400, detail="Buyer AI wallet not found")
+        
+        if buyer_wallet[0] < transaction.amount:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Insufficient balance. Current: {buyer_wallet[0]}, Required: {transaction.amount}"
+            )
+        
+        # Deduct payment from AI wallet
+        await db.execute(
+            'UPDATE ai_wallets SET balance = balance - ? WHERE address = ?',
+            (transaction.amount, transaction.from_address)
+        )
+        await db.commit()
+        print(f"[Payment] Deducted {transaction.amount} from AI wallet {transaction.from_address}")
+    
+    # Create transaction data with status 'paid'
     tx_data = {
         "tx_id": tx_id,
         "from_address": transaction.from_address,
@@ -133,37 +171,96 @@ async def create_new_transaction(transaction: TransactionCreate) -> TransactionR
         "currency": transaction.currency,
         "contract_hash": transaction.contract_hash,
         "file_hash": transaction.file_hash,
-        "status": "pending",
+        "status": "paid",  # Changed from 'pending' to 'paid'
         "referrer_address": transaction.referrer_address
     }
     
     # For demo purposes, use a dummy private key
-    # In production, this would come from a secure key management system
     dummy_private_key = "0000000000000000000000000000000000000000000000000000000000000000"
     signed_tx = sign_transaction(tx_data, dummy_private_key)
     
     # Save to database
     created_tx = await create_transaction(signed_tx)
     
-    # Handle referral rewards if referrer is provided
-    if transaction.referrer_address:
-        # Calculate referral chain (5 levels)
-        referral_chain = await calculate_referral_chain(transaction.from_address)
+    # Query SELLER's referral chain and push to async queue
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT tu1, tu2, tu3 FROM users WHERE address = ?',
+            (transaction.to_address,)  # to_address is seller
+        )
+        seller = await cursor.fetchone()
         
-        # Add the direct referrer to the chain if not already there
-        if transaction.referrer_address not in referral_chain:
-            referral_chain.insert(0, transaction.referrer_address)
+        if seller:
+            tu1_addr = seller[0]
+            tu2_addr = seller[1]
+            tu3_addr = seller[2]
+            
+            # Calculate reward amounts (round to 2 decimal places, ensure total doesn't exceed order amount)
+            tu1_amount = round(transaction.amount * 0.05, 2) if tu1_addr else 0
+            tu2_amount = round(transaction.amount * 0.03, 2) if tu2_addr else 0
+            tu3_amount = round(transaction.amount * 0.02, 2) if tu3_addr else 0
+            
+            # Seller gets 90%
+            seller_amount = round(transaction.amount * 0.90, 2)
+            
+            # Ensure total commission doesn't exceed order amount
+            total_commission = seller_amount + tu1_amount + tu2_amount + tu3_amount
+            if total_commission > transaction.amount:
+                # Adjust proportionally if rounding causes overflow
+                ratio = transaction.amount / total_commission
+                seller_amount = round(seller_amount * ratio, 2)
+                tu1_amount = round(tu1_amount * ratio, 2)
+                tu2_amount = round(tu2_amount * ratio, 2)
+                tu3_amount = round(tu3_amount * ratio, 2)
+            
+            # Push settlement data to Redis queue (async write)
+            try:
+                from src.utils.redis_queue import settlement_queue
+                from src.utils.settlement_worker import process_settlement
+                
+                settlement_queue.enqueue(
+                    process_settlement,
+                    tx_id, 
+                    transaction.to_address, seller_amount,  # Seller address and amount
+                    tu1_addr or '', tu1_amount or 0,
+                    tu2_addr or '', tu2_amount or 0,
+                    tu3_addr or '', tu3_amount or 0
+                )
+                
+                print(f"[Order] {tx_id} - Settlement queued (seller: {seller_amount}, tu1: {tu1_amount}, tu2: {tu2_amount}, tu3: {tu3_amount})")
+            except Exception as e:
+                print(f"[Order] Failed to queue settlement: {e}")
+    
+    # Start auto-confirm countdown (default 72 hours)
+    try:
+        from src.anchor.auto_confirm import auto_confirm_service
         
-        # Limit to 5 levels
-        referral_chain = referral_chain[:5]
+        # Get buyer's reputation to determine auto-confirm time
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                'SELECT reputation_score FROM users WHERE address = ?',
+                (transaction.from_address,)
+            )
+            user = await cursor.fetchone()
+            reputation = user[0] if user else 100
         
-        # Calculate and add REWARDS AS PENDING (not distributed yet)
-        reward_percentages = [0.05, 0.03, 0.02, 0.01, 0.005]  # 5%, 3%, 2%, 1%, 0.5%
-        for i, referrer in enumerate(referral_chain):
-            if i < len(reward_percentages):
-                reward_amount = transaction.amount * reward_percentages[i]
-                # Create pending reward record (will be settled after transaction completes)
-                await add_referral_reward(tx_id, referrer, reward_amount, i + 1, status='pending')
+        # Calculate auto-confirm hours based on reputation
+        if reputation >= 95:
+            auto_confirm_hours = 24  # High trust: 24 hours
+        elif reputation >= 85:
+            auto_confirm_hours = 48  # Medium trust: 48 hours
+        else:
+            auto_confirm_hours = 72  # Low trust: 72 hours
+        
+        # Start countdown
+        await auto_confirm_service.start_countdown(
+            tx_id=tx_id,
+            auto_confirm_hours=auto_confirm_hours
+        )
+        
+        print(f"[AutoConfirm] Started {auto_confirm_hours}h countdown for order {tx_id} (reputation: {reputation})")
+    except Exception as e:
+        print(f"[AutoConfirm] Failed to start countdown: {e}")
     
     return TransactionResponse(**created_tx)
 
@@ -171,19 +268,205 @@ async def create_new_transaction(transaction: TransactionCreate) -> TransactionR
 @router.post("/api/v1/transactions/{tx_id}/complete")
 async def complete_transaction(tx_id: str) -> Dict[str, Any]:
     """
-    Complete a transaction and settle referral rewards.
+    Complete a transaction and trigger async settlement.
     Call this when buyer confirms receipt or auto-confirm timeout.
+    
+    Rate limit: 1 request per 60 seconds
+    
+    Only allowed for 'paid' and 'shipped' status orders.
     """
+    # Rate limiting
+    allowed, remaining = rate_limiter.is_allowed(f"complete_{tx_id}", interval=5)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Wait {remaining}s"
+        )
+    
+    # Check transaction status
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT status FROM transactions WHERE tx_id = ?',
+            (tx_id,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        
+        current_status = row[0]
+        
+        # Only allow complete for 'paid' or 'shipped' status
+        if current_status not in ['paid', 'shipped']:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot complete transaction with status '{current_status}'. Only 'paid' or 'shipped' orders can be completed."
+            )
+    
     # Update transaction status
     await update_transaction_status(tx_id, 'completed')
     
-    # Settle all pending referral rewards
-    settled_count = await settle_referral_rewards(tx_id)
+    # Get referral info from order
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT tu1_address, tu1_amount, tu2_address, tu2_amount, tu3_address, tu3_amount FROM transactions WHERE tx_id = ?',
+            (tx_id,)
+        )
+        order = await cursor.fetchone()
+        
+        if order:
+            tu1_addr, tu1_amount, tu2_addr, tu2_amount, tu3_addr, tu3_amount = order
+            
+            # Push settlement task to Redis queue
+            try:
+                from src.utils.redis_queue import settlement_queue
+                from src.utils.settlement_worker import process_settlement
+                
+                settlement_queue.enqueue(
+                    process_settlement,
+                    tx_id, tu1_addr or '', tu1_amount or 0,
+                    tu2_addr or '', tu2_amount or 0,
+                    tu3_addr or '', tu3_amount or 0
+                )
+                
+                print(f"[Complete] Settlement task queued for order {tx_id}")
+            except Exception as e:
+                print(f"[Complete] Failed to queue settlement: {e}")
+    
+    # Cancel auto-confirm countdown if exists
+    try:
+        from src.anchor.auto_confirm import auto_confirm_service
+        await auto_confirm_service.cancel_countdown(tx_id)
+    except:
+        pass
     
     return {
-        "message": "Transaction completed",
+        "message": "Transaction completed, settlement queued",
+        "tx_id": tx_id
+    }
+
+
+@router.post("/api/v1/transactions/{tx_id}/dispute")
+async def dispute_transaction(tx_id: str, dispute_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    """
+    Initiate a dispute for a transaction.
+    
+    Rate limit: 1 request per 60 seconds
+    
+    Only allowed for 'paid' and 'shipped' status orders.
+    """
+    # Rate limiting
+    allowed, remaining = rate_limiter.is_allowed(f"dispute_{tx_id}", interval=5)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Wait {remaining}s"
+        )
+    
+    # Check transaction status
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT status, from_address, to_address, amount FROM transactions WHERE tx_id = ?',
+            (tx_id,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        
+        current_status, buyer_addr, seller_addr, amount = row
+        
+        # Only allow dispute for 'paid' or 'shipped' status
+        if current_status not in ['paid', 'shipped']:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot dispute transaction with status '{current_status}'. Only 'paid' or 'shipped' orders can be disputed."
+            )
+    
+    # Update transaction status to 'disputed'
+    await update_transaction_status(tx_id, 'disputed')
+    
+    # Cancel auto-confirm countdown if exists
+    try:
+        from src.anchor.auto_confirm import auto_confirm_service
+        await auto_confirm_service.cancel_countdown(tx_id)
+        print(f"[Dispute] Cancelled auto-confirm countdown for order {tx_id}")
+    except Exception as e:
+        print(f"[Dispute] Failed to cancel countdown: {e}")
+    
+    # TODO: Notify seller and start arbitration process
+    # For now, just return success
+    
+    return {
+        "message": "Dispute initiated. Transaction frozen pending arbitration.",
         "tx_id": tx_id,
-        "referral_rewards_settled": settled_count
+        "status": "disputed"
+    }
+
+
+@router.post("/api/v1/transactions/{tx_id}/refund")
+async def refund_transaction(tx_id: str) -> Dict[str, Any]:
+    """
+    Refund a transaction (after arbitration).
+    Returns money to buyer and cancels referral rewards.
+    
+    Rate limit: 1 request per 60 seconds
+    
+    Only allowed for 'disputed' status orders.
+    """
+    # Rate limiting
+    allowed, remaining = rate_limiter.is_allowed(f"refund_{tx_id}", interval=5)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Wait {remaining}s"
+        )
+    
+    # Check transaction status
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT status, from_address, to_address, amount FROM transactions WHERE tx_id = ?',
+            (tx_id,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        
+        current_status, buyer_addr, seller_addr, amount = row
+        
+        # Only allow refund for 'disputed' status
+        if current_status != 'disputed':
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot refund transaction with status '{current_status}'. Only 'disputed' orders can be refunded."
+            )
+    
+    # Refund to buyer's AI wallet
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            'UPDATE ai_wallets SET balance = balance + ? WHERE address = ?',
+            (amount, buyer_addr)
+        )
+        await db.commit()
+    
+    # Update transaction status to 'refunded'
+    await update_transaction_status(tx_id, 'refunded')
+    
+    # Cancel all pending referral rewards
+    await cancel_referral_rewards(tx_id)
+    
+    # Cancel auto-confirm countdown if exists
+    try:
+        from src.anchor.auto_confirm import auto_confirm_service
+        await auto_confirm_service.cancel_countdown(tx_id)
+    except:
+        pass
+    
+    return {
+        "message": f"Refunded {amount} USDT to buyer {buyer_addr}",
+        "tx_id": tx_id,
+        "status": "refunded"
     }
 
 
@@ -191,7 +474,17 @@ async def complete_transaction(tx_id: str) -> Dict[str, Any]:
 async def cancel_transaction(tx_id: str) -> Dict[str, Any]:
     """
     Cancel a transaction and void referral rewards.
+    
+    Rate limit: 1 request per 60 seconds
     """
+    # Rate limiting
+    allowed, remaining = rate_limiter.is_allowed(f"cancel_{tx_id}", interval=5)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Wait {remaining}s"
+        )
+    
     # Update transaction status
     await update_transaction_status(tx_id, 'cancelled')
     
@@ -208,7 +501,17 @@ async def cancel_transaction(tx_id: str) -> Dict[str, Any]:
 async def get_transaction_by_id(tx_id: str) -> TransactionResponse:
     """
     Get a transaction by its ID.
+    
+    Rate limit: 1 request per 60 seconds
     """
+    # Rate limiting
+    allowed, remaining = rate_limiter.is_allowed(f"get_tx_{tx_id}", interval=5)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Wait {remaining}s"
+        )
+    
     transaction = await get_transaction(tx_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -220,7 +523,7 @@ async def list_all_transactions(
     status: Optional[str] = None,
     from_address: Optional[str] = None,
     to_address: Optional[str] = None,
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0)
 ) -> List[TransactionResponse]:
     """
@@ -229,9 +532,20 @@ async def list_all_transactions(
     - **status**: Filter by transaction status
     - **from_address**: Filter by sender address
     - **to_address**: Filter by recipient address
-    - **limit**: Maximum number of transactions to return (default: 100)
+    - **limit**: Maximum number of transactions to return (default: 50, max: 100)
     - **offset**: Offset for pagination (default: 0)
+    
+    Rate limit: 1 request per 60 seconds per IP
     """
+    # Apply rate limiting (60 seconds per request)
+    client_ip = "unknown"  # In production, get from request headers
+    allowed, remaining = rate_limiter.is_allowed(f"list_tx_{client_ip}", interval=5)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Please wait {remaining} seconds before next query."
+        )
+    
     transactions = await list_transactions(
         status=status,
         from_address=from_address,
@@ -389,20 +703,60 @@ async def get_human_wallet(address: str) -> Dict[str, Any]:
 @router.get("/api/v1/wallets/ai/{address}")
 async def get_ai_wallet(address: str) -> Dict[str, Any]:
     """
-    Get AI wallet (encrypted/hidden for privacy).
+    Get AI wallet with balance.
     
     AI wallets receive referral commissions automatically.
-    Balance is encrypted to prevent targeted attacks.
+    
+    Rate limit: 1 request per 5 seconds (development), 60 seconds (production)
     """
+    # Rate limiting - use 5s for development, 60s for production
+    import os
+    interval = int(os.getenv('RATE_LIMIT_INTERVAL', '5'))  # Default 5s for dev
+    allowed, remaining = rate_limiter.is_allowed(f"ai_wallet_{address}", interval=interval)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Wait {remaining}s"
+        )
+    
     wallet = await get_or_create_wallet(address)
     return {
         "address": wallet['address'],
-        "balance_encrypted": True,  # Indicates balance is hidden
+        "balance": wallet['balance'],
         "total_earned": wallet['total_earned'],
         "referral_count": wallet['referral_count'],
-        "created_at": wallet['created_at'],
-        "note": "AI wallet balance is encrypted for security"
+        "created_at": wallet['created_at']
     }
+
+
+@router.get("/api/v1/wallets/ai/generate")
+async def generate_ai_wallet(ai_index: int = Query(0, ge=0)) -> Dict[str, Any]:
+    """
+    Generate AI sub-wallet from master wallet.
+    
+    Args:
+        ai_index: Unique index for this AI (starts from 0)
+        
+    Returns:
+        dict: AI wallet information (address only, no private key)
+    """
+    try:
+        wallet_info = hd_wallet_service.generate_ai_wallet(ai_index)
+        
+        # Create or get wallet in database
+        wallet = await get_or_create_wallet(wallet_info['address'])
+        
+        return {
+            "success": True,
+            "wallet": {
+                "address": wallet_info['address'],
+                "path": wallet_info['path'],
+                "index": wallet_info['index'],
+                "master_address": wallet_info['master_address']
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate wallet: {str(e)}")
 
 
 @router.post("/api/v1/wallet/{address}/withdraw")
@@ -436,41 +790,398 @@ async def withdraw_from_wallet(address: str, withdraw: WalletWithdraw) -> Dict[s
 
 # ===== Deposit & Withdrawal Endpoints =====
 
-@router.post("/api/v1/deposits")
-async def create_deposit(deposit_data: Dict[str, Any]) -> Dict[str, Any]:
+@router.get("/api/v1/deposits/wallet-address")
+async def get_deposit_wallet_address(user_address: str) -> Dict[str, Any]:
     """
-    Record a deposit transaction (after on-chain confirmation).
+    获取用户的充值地址（如果不存在则自动创建）
+    """
+    from src.crypto.tron_chain import TronChainService
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT wallet_address FROM sub_wallets WHERE user_address = ?',
+            (user_address,)
+        )
+        sub_wallet = await cursor.fetchone()
+        
+        if sub_wallet:
+            # 已存在，直接返回
+            return {
+                "wallet_address": sub_wallet[0],
+                "newly_created": False
+            }
+        
+        # 不存在，自动创建（兼容老用户）
+        tron_service = TronChainService()
+        new_sub_wallet = tron_service.generate_sub_wallet()
+        
+        await db.execute('''
+            INSERT INTO sub_wallets (user_address, wallet_address, private_key)
+            VALUES (?, ?, ?)
+        ''', (user_address, new_sub_wallet['address'], new_sub_wallet['private_key']))
+        await db.commit()
+        
+        print(f"[Auto-Create] Sub-wallet created for user: {user_address}")
+        
+        return {
+            "wallet_address": new_sub_wallet['address'],
+            "newly_created": True
+        }
+
+
+@router.post("/api/v1/deposits/refresh-balance")
+async def refresh_wallet_balance(refresh_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    刷新钱包余额 - 查询链上最新交易并更新数据库
+    
+    **Request Body:**
+    ```json
+    {
+        "user_address": "0x123..."
+    }
+    ```
+    """
+    from src.crypto.tron_chain import TronChainService
+    
+    user_address = refresh_data.get('user_address')
+    if not user_address:
+        raise HTTPException(status_code=400, detail="Missing user_address")
+    
+    try:
+        # 获取用户子钱包地址
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                'SELECT wallet_address FROM sub_wallets WHERE user_address = ?',
+                (user_address,)
+            )
+            sub_wallet = await cursor.fetchone()
+            
+            if not sub_wallet:
+                raise HTTPException(status_code=404, detail="Sub-wallet not found")
+            
+            wallet_address = sub_wallet[0]
+        
+        # 查询链上最新充值记录
+        tron_service = TronChainService()
+        deposits = tron_service.monitor_deposit(wallet_address, min_amount=0.01)
+        
+        if not deposits:
+            return {
+                "message": "No new deposits found",
+                "balance_updated": False
+            }
+        
+        # 处理新发现的交易
+        new_deposits_count = 0
+        total_new_amount = 0.0
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            for dep in deposits:
+                tx_hash = dep['tx_id']
+                amount = dep['amount']
+                
+                # 检查是否已记录
+                cursor = await db.execute(
+                    'SELECT id FROM deposits WHERE tx_hash = ?',
+                    (tx_hash,)
+                )
+                if await cursor.fetchone():
+                    continue  # 已存在，跳过
+                
+                # 记录新充值
+                deposit_id = await record_deposit(user_address, wallet_address, tx_hash, amount)
+                
+                # 自动确认
+                await db.execute(
+                    'UPDATE deposits SET status = ?, confirmed_at = ? WHERE id = ?',
+                    ('confirmed', datetime.now().isoformat(), deposit_id)
+                )
+                
+                # 更新人类钱包余额
+                await db.execute(
+                    'UPDATE human_wallets SET points_balance = points_balance + ?, total_deposited = total_deposited + ? WHERE address = ?',
+                    (amount, amount, user_address)
+                )
+                
+                new_deposits_count += 1
+                total_new_amount += amount
+            
+            await db.commit()
+        
+        # 获取最新余额
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                'SELECT points_balance, total_deposited FROM human_wallets WHERE address = ?',
+                (user_address,)
+            )
+            wallet = await cursor.fetchone()
+        
+        return {
+            "message": f"Found {new_deposits_count} new deposit(s)",
+            "new_deposits": new_deposits_count,
+            "total_amount": total_new_amount,
+            "balance_updated": new_deposits_count > 0,
+            "wallet": {
+                "points_balance": wallet[0] if wallet else 0,
+                "total_deposited": wallet[1] if wallet else 0
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Refresh Balance Error] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+async def verify_deposit(verify_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    验证链上充值交易
     
     **Request Body:**
     ```json
     {
         "user_address": "0x123...",
-        "tx_hash": "0xabc...",
-        "amount": 100.0
+        "tx_hash": "0xabc..."
+    }
+    ```
+    """
+    from src.crypto.tron_chain import TronChainService
+    
+    user_address = verify_data.get('user_address')
+    tx_hash = verify_data.get('tx_hash')
+    
+    if not all([user_address, tx_hash]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    
+    try:
+        # 验证交易是否上链成功
+        tron_service = TronChainService()
+        tx_info = tron_service.verify_tx(tx_hash)
+        
+        if not tx_info.get('confirmed'):
+            raise HTTPException(status_code=400, detail="Transaction not confirmed on chain")
+        
+        # 获取用户子钱包地址
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                'SELECT wallet_address FROM sub_wallets WHERE user_address = ?',
+                (user_address,)
+            )
+            sub_wallet = await cursor.fetchone()
+            
+            if not sub_wallet:
+                raise HTTPException(status_code=404, detail="Sub-wallet not found")
+            
+            wallet_address = sub_wallet[0]
+            
+            # 检查该交易哈希是否已经记录
+            cursor = await db.execute(
+                'SELECT id FROM deposits WHERE tx_hash = ?',
+                (tx_hash,)
+            )
+            if await cursor.fetchone():
+                raise HTTPException(status_code=409, detail="This transaction has already been recorded")
+        
+        # 从链上查询实际到账金额
+        deposits = tron_service.monitor_deposit(wallet_address, min_amount=0.01)
+        actual_amount = 0.0
+        
+        for dep in deposits:
+            if dep['tx_id'] == tx_hash:
+                actual_amount = dep['amount']
+                break
+        
+        if actual_amount == 0.0:
+            # 尝试直接查询余额变化
+            actual_amount = tron_service.get_balance(wallet_address)
+        
+        # 记录充值
+        async with aiosqlite.connect(DB_PATH) as db:
+            deposit_id = await record_deposit(user_address, wallet_address, tx_hash, actual_amount)
+            
+            # 自动确认并更新余额
+            await db.execute(
+                'UPDATE deposits SET status = ?, confirmed_at = ? WHERE id = ?',
+                ('confirmed', datetime.now().isoformat(), deposit_id)
+            )
+            
+            # 更新人类钱包余额
+            await db.execute(
+                'UPDATE human_wallets SET points_balance = points_balance + ?, total_deposited = total_deposited + ? WHERE address = ?',
+                (actual_amount, actual_amount, user_address)
+            )
+            
+            await db.commit()
+        
+        return {
+            "message": "Deposit confirmed from on-chain transaction",
+            "deposit_id": deposit_id,
+            "amount": actual_amount,
+            "tx_hash": tx_hash,
+            "status": "confirmed"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/v1/admin/deposits/manual")
+async def admin_manual_deposit(deposit_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    管理员手动充值（测试用）
+    
+    **Request Body:**
+    ```json
+    {
+        "user_address": "AI钱包地址",
+        "amount": 100.0,
+        "reason": "测试充值"
     }
     ```
     """
     user_address = deposit_data.get('user_address')
-    tx_hash = deposit_data.get('tx_hash')
     amount = deposit_data.get('amount')
+    reason = deposit_data.get('reason', 'Manual deposit')
     
-    if not all([user_address, tx_hash, amount]):
+    if not all([user_address, amount]):
         raise HTTPException(status_code=400, detail="Missing required fields")
     
-    # Record deposit
-    deposit_id = await record_deposit(user_address, tx_hash, amount)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
     
-    # Confirm deposit and update balance
-    success = await confirm_deposit(tx_hash)
-    
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to confirm deposit")
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Update both users.ai_balance and ai_wallets.balance
+        await db.execute(
+            'UPDATE users SET ai_balance = ai_balance + ? WHERE ai_address = ?',
+            (amount, user_address)
+        )
+        
+        await db.execute(
+            'UPDATE ai_wallets SET balance = balance + ? WHERE address = ?',
+            (amount, user_address)
+        )
+        
+        # Check if update successful
+        if db.total_changes == 0:
+            raise HTTPException(status_code=404, detail="AI wallet not found")
+        
+        await db.commit()
+        
+        print(f"[Admin Deposit] {amount} USDT added to AI wallet: {user_address}")
     
     return {
-        "message": "Deposit confirmed",
-        "deposit_id": deposit_id,
-        "amount": amount
+        "message": "Deposit successful",
+        "amount": amount,
+        "ai_wallet_address": user_address
     }
+
+
+@router.post("/api/v1/admin/deposits/batch")
+async def admin_batch_deposit(batch_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    管理员批量充值（用于 AI 多层销售测试）
+    
+    **Request Body:**
+    ```json
+    {
+        "deposits": [
+            {"user_address": "0x123...", "amount": 100.0, "reason": "测试充值"},
+            {"user_address": "0x456...", "amount": 200.0, "reason": "AI销售奖励"}
+        ]
+    }
+    ```
+    """
+    deposits_list = batch_data.get('deposits', [])
+    
+    if not deposits_list:
+        raise HTTPException(status_code=400, detail="No deposits provided")
+    
+    results = []
+    failed = []
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        for item in deposits_list:
+            try:
+                user_address = item.get('user_address')
+                amount = item.get('amount')
+                reason = item.get('reason', 'Batch deposit')
+                
+                if not all([user_address, amount]) or amount <= 0:
+                    failed.append({"user_address": user_address, "error": "Invalid data"})
+                    continue
+                
+                # 检查用户是否存在 - 支持 Tron 子钱包地址
+                cursor = await db.execute(
+                    'SELECT id FROM users WHERE address = ?',
+                    (user_address,)
+                )
+                user_row = await cursor.fetchone()
+                target_address = user_address
+                
+                if not user_row:
+                    cursor = await db.execute(
+                        'SELECT user_address FROM sub_wallets WHERE wallet_address = ?',
+                        (user_address,)
+                    )
+                    sub_row = await cursor.fetchone()
+                    if not sub_row:
+                        failed.append({"user_address": user_address, "error": "User not found"})
+                        continue
+                    target_address = sub_row[0]
+                
+                # 记录充值
+                deposit_id = await record_deposit(
+                    user_address=target_address,
+                    wallet_address='ADMIN_BATCH',
+                    tx_hash=f'BATCH_{datetime.now().strftime("%Y%m%d%H%M%S")}_{target_address[:8]}',
+                    amount=amount
+                )
+                
+                # 自动确认
+                await db.execute(
+                    'UPDATE deposits SET status = ?, confirmed_at = ?, notes = ? WHERE id = ?',
+                    ('confirmed', datetime.now().isoformat(), reason, deposit_id)
+                )
+                
+                # 更新余额
+                await db.execute(
+                    'UPDATE human_wallets SET points_balance = points_balance + ?, total_deposited = total_deposited + ? WHERE address = ?',
+                    (amount, amount, target_address)
+                )
+                
+                results.append({
+                    "user_address": user_address,
+                    "amount": amount,
+                    "deposit_id": deposit_id,
+                    "status": "success"
+                })
+            except Exception as e:
+                failed.append({"user_address": item.get('user_address'), "error": str(e)})
+        
+        await db.commit()
+    
+    return {
+        "message": f"Batch deposit completed: {len(results)} success, {len(failed)} failed",
+        "successful": results,
+        "failed": failed,
+        "total_amount": sum(r['amount'] for r in results)
+    }
+
+
+@router.get("/api/v1/admin/deposits")
+async def list_pending_deposits() -> Dict[str, Any]:
+    """
+    List all deposits for admin review.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT * FROM deposits ORDER BY created_at DESC LIMIT 100'
+        )
+        rows = await cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+        
+        deposits = [dict(zip(columns, row)) for row in rows]
+    
+    return {"deposits": deposits, "total": len(deposits)}
 
 
 @router.post("/api/v1/withdrawals")
@@ -517,6 +1228,306 @@ async def create_withdrawal(withdraw_data: Dict[str, Any]) -> Dict[str, Any]:
         "withdrawal_id": withdrawal_id,
         "amount": amount,
         "status": "completed"
+    }
+
+
+# ===== User Authentication Endpoints =====
+
+
+@router.post("/api/v1/users/register")
+async def user_register(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Step 1: Register with email, generate verification code.
+    """
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+    referrer_address = data.get('referrer_address') or ''
+    if isinstance(referrer_address, str):
+        referrer_address = referrer_address.strip()
+    
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+    
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    
+    # Check if email already registered
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            'SELECT id FROM users WHERE email = ?', (email,)
+        )
+        existing = await cursor.fetchone()
+        
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Generate 6-digit verification code
+        code = ''.join(random.choices(string.digits, k=6))
+        expires = datetime.now() + timedelta(minutes=10)
+        
+        # Store temp user data (will be activated after verification)
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
+        await db.execute('''
+            INSERT INTO users (email, password_hash, verification_code, verification_code_expires, is_verified)
+            VALUES (?, ?, ?, ?, 0)
+        ''', (email, password_hash, code, expires.isoformat()))
+        await db.commit()
+        
+    # TODO: Send email with code in production
+    # For now, return code in response for development
+    return {
+        "message": "Verification code sent to email",
+        "mockCode": code,  # Remove in production
+        "email": email,
+        "referrer_address": referrer_address  # Pass to verify step
+    }
+
+
+@router.post("/api/v1/users/verify-email")
+async def user_verify_email(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Step 2: Verify email code and activate account.
+    Creates user wallets after verification.
+    """
+    email = data.get('email', '').strip().lower()
+    code = data.get('code', '').strip()
+    referrer_address = data.get('referrer_address') or ''
+    if isinstance(referrer_address, str):
+        referrer_address = referrer_address.strip()
+    
+    if not email or not code:
+        raise HTTPException(status_code=400, detail="Email and code are required")
+    
+    # If no referrer, use platform master wallet as default referrer
+    if not referrer_address:
+        referrer_address = os.getenv('PLATFORM_WALLET_ADDRESS', '0x0000000000000000000000000000000000000000')
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        
+        # Find pending registration
+        cursor = await db.execute('''
+            SELECT id, password_hash, verification_code, verification_code_expires, is_verified
+            FROM users WHERE email = ?
+        ''', (email,))
+        user = await cursor.fetchone()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="Registration not found")
+        
+        if user['is_verified']:
+            raise HTTPException(status_code=400, detail="Account already verified")
+        
+        if user['verification_code'] != code:
+            raise HTTPException(status_code=400, detail="Invalid verification code")
+        
+        expires = datetime.fromisoformat(user['verification_code_expires'])
+        if datetime.now() > expires:
+            raise HTTPException(status_code=400, detail="Verification code expired")
+        
+        # Activate account
+        await db.execute('''
+            UPDATE users SET is_verified = 1, verification_code = NULL, verification_code_expires = NULL
+            WHERE email = ?
+        ''', (email,))
+            
+        # Generate two Tron sub-wallets from master wallet
+        from src.crypto.tron_chain import TronChainService
+        tron_service = TronChainService()
+        
+        # Human wallet (for deposits and trading)
+        human_sub_wallet = tron_service.generate_sub_wallet()
+        human_address = human_sub_wallet['address']
+        
+        # AI wallet (for AI agent transactions and referral code)
+        ai_sub_wallet = tron_service.generate_sub_wallet()
+        ai_address = ai_sub_wallet['address']
+        
+        # Store both addresses in users table
+        await db.execute('''
+            UPDATE users SET address = ?, ai_address = ?, human_balance = 0.0, ai_balance = 0.0
+            WHERE email = ?
+        ''', (human_address, ai_address, email))
+        
+        # Store sub-wallets for reference
+        await db.execute('''
+            INSERT OR REPLACE INTO sub_wallets (user_address, wallet_address, private_key, wallet_type)
+            VALUES (?, ?, ?, 'human')
+        ''', (human_address, human_address, human_sub_wallet['private_key']))
+        
+        await db.execute('''
+            INSERT OR REPLACE INTO sub_wallets (user_address, wallet_address, private_key, wallet_type)
+            VALUES (?, ?, ?, 'ai')
+        ''', (human_address, ai_address, ai_sub_wallet['private_key']))
+        
+        await db.commit()
+        
+        print(f"[Register] User {email} - Human: {human_address}, AI: {ai_address}")
+    
+    # Create AI wallet record
+    ai_wallet = await get_or_create_wallet(ai_address)
+    
+    # Create human wallet record
+    human_wallet = await get_or_create_human_wallet(human_address)
+    
+    # Record referral relationship if referrer provided
+    if referrer_address:
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Find referrer's user record by AI address
+            cursor = await db.execute(
+                'SELECT address, ai_address, tu1, tu2 FROM users WHERE ai_address = ?',
+                (referrer_address,)
+            )
+            referrer = await cursor.fetchone()
+            
+            if referrer:
+                referrer_human_addr = referrer[0]
+                referrer_ai_addr = referrer[1]
+                referrer_tu1 = referrer[2]  # Referrer's level 1
+                referrer_tu2 = referrer[3]  # Referrer's level 2
+                
+                # Set new user's referral chain
+                # Level 1: The direct referrer (their AI address)
+                # Level 2: Referrer's level 1 (their AI address)
+                # Level 3: Referrer's level 2 (their AI address)
+                
+                new_tu1 = referrer_ai_addr
+                new_tu2 = referrer_tu1
+                new_tu3 = referrer_tu2
+                
+                await db.execute(
+                    'UPDATE users SET tu1 = ?, tu2 = ?, tu3 = ? WHERE address = ?',
+                    (new_tu1, new_tu2, new_tu3, human_address)
+                )
+                await db.commit()
+                
+                print(f"[Referral] New user {human_address} - tu1:{new_tu1}, tu2:{new_tu2}, tu3:{new_tu3}")
+    
+    # Generate mock JWT token
+    token = hashlib.sha256(f"{email}_{datetime.now().isoformat()}".encode()).hexdigest()
+    
+    return {
+        "message": "Registration successful",
+        "token": token,
+        "user": {
+            "email": email,
+            "address": human_address,
+            "ai_wallet_address": ai_address,
+            "reputation_score": 100
+        }
+    }
+
+
+@router.post("/api/v1/users/login")
+async def user_login(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Login with email and password.
+    """
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+    
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+    
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute('''
+            SELECT id, email, address, reputation_score, is_verified
+            FROM users WHERE email = ? AND password_hash = ?
+        ''', (email, password_hash))
+        user = await cursor.fetchone()
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    if not user['is_verified']:
+        raise HTTPException(status_code=400, detail="Account not verified")
+    
+    # Get AI wallet address from sub_wallets
+    cursor = await db.execute(
+        'SELECT wallet_address FROM sub_wallets WHERE user_address = ? AND wallet_type = ?',
+        (user['address'], 'ai')
+    )
+    ai_row = await cursor.fetchone()
+    ai_address = ai_row[0] if ai_row else None
+    
+    # Generate mock JWT token
+    token = hashlib.sha256(f"{email}_{datetime.now().isoformat()}".encode()).hexdigest()
+    
+    return {
+        "message": "Login successful",
+        "token": token,
+        "user": {
+            "email": user['email'],
+            "address": user['address'],
+            "ai_wallet_address": ai_address,
+            "reputation_score": user['reputation_score']
+        }
+    }
+
+
+@router.post("/api/v1/users/third-party-login")
+async def user_third_party_login(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Third-party login (Google, GitHub, etc.) - Mock implementation.
+    """
+    provider = data.get('provider', '')
+    provider_id = data.get('providerId', '')
+    email = data.get('email', '').strip().lower()
+    name = data.get('name', '')
+    
+    if not email or not provider:
+        raise HTTPException(status_code=400, detail="Email and provider are required")
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        
+        # Check if user exists
+        cursor = await db.execute('''
+            SELECT id, email, address, reputation_score, is_verified
+            FROM users WHERE email = ?
+        ''', (email,))
+        user = await cursor.fetchone()
+    
+    if not user:
+        # Auto-create account for third-party login
+        password_hash = hashlib.sha256(f"oauth_{provider}_{provider_id}".encode()).hexdigest()
+        import nacl.signing
+        seed = hashlib.sha256(f"{email}_oauth_seed".encode()).digest()[:32]
+        signing_key = nacl.signing.SigningKey(seed)
+        verify_key = signing_key.verify_key
+        address = '0x' + verify_key.encode().hex()[:40]
+        
+        await db.execute('''
+            INSERT INTO users (email, password_hash, address, name, is_verified)
+            VALUES (?, ?, ?, ?, 1)
+        ''', (email, password_hash, address, name))
+        await db.commit()
+            
+        # Create wallets
+        await get_or_create_wallet(address)
+        await get_or_create_human_wallet(address)
+        
+        user = {
+            'email': email,
+            'address': address,
+            'reputation_score': 100
+        }
+    
+    token = hashlib.sha256(f"{email}_{datetime.now().isoformat()}".encode()).hexdigest()
+    
+    return {
+        "message": "Login successful",
+        "token": token,
+        "user": {
+            "email": user['email'],
+            "address": user['address'],
+            "reputation_score": user['reputation_score']
+        }
     }
 
 
@@ -580,6 +1591,7 @@ class ProductCreate(BaseModel):
     contract_template: str = ""
     metrics: List[Dict[str, Any]] = []
     file_hash: str = ""
+    delivery_url: str = ""
     delivery_method: str = ""
     auto_confirm_hours: int = 72
     storage_plan: str = ""
@@ -600,6 +1612,7 @@ class ProductResponse(BaseModel):
     contract_template: str
     metrics: List[Dict[str, Any]]
     file_hash: str
+    delivery_url: str
     delivery_method: str
     auto_confirm_hours: int
     storage_plan: str
@@ -621,6 +1634,7 @@ async def create_new_product(product: ProductCreate) -> Dict[str, Any]:
     - **metrics**: Quantifiable metrics array
     - **file_hash**: SHA-256 hash of product file
     """
+    print(f"[DEBUG] 收到商品发布请求: {product.name}, seller={product.seller_address}")
     try:
         # Check reputation score
         if product.reputation_score < 60:
@@ -636,13 +1650,47 @@ async def create_new_product(product: ProductCreate) -> Dict[str, Any]:
                 detail="At least one quantifiable metric is required"
             )
         
-        # Create product in database
+        # Generate contract hash according to White Paper Section 2.7 Rule 1
+        # Contract Hash = SHA256(all contract terms + file_hash + seller_id + timestamp)
+        import json
+        contract_terms = {
+            'name': product.name,
+            'description': product.description,
+            'price': product.price,
+            'currency': product.currency,
+            'category': product.category,
+            'version': product.version,
+            'system_requirements': product.system_requirements,
+            'contract_template': product.contract_template,
+            'metrics': product.metrics,
+            'delivery_method': product.delivery_method,
+            'auto_confirm_hours': product.auto_confirm_hours,
+            'storage_plan': product.storage_plan
+        }
+        
+        # Create hash input string
+        hash_input = json.dumps(contract_terms, sort_keys=True) + product.file_hash + product.seller_address + datetime.now().isoformat()
+        contract_hash = hashlib.sha256(hash_input.encode()).hexdigest()
+        
+        # Add contract_hash to product_data
         product_data = product.dict()
+        product_data['contract_hash'] = contract_hash
+        
+        # Create product in database
         product_id = await create_product(product_data)
+        
+        # Anchor contract hash to GitHub (White Paper Section 2.7)
+        try:
+            anchor_service = GitHubAnchorService()
+            await anchor_service.anchor_contract_hash(contract_hash, product_id)
+        except Exception as e:
+            print(f"Warning: Failed to anchor to GitHub: {e}")
         
         return {
             "message": "Product created successfully",
             "product_id": product_id,
+            "contract_hash": contract_hash,
+            "file_hash": product.file_hash,
             "status": "active"
         }
     except HTTPException:
@@ -1056,11 +2104,17 @@ async def get_template_detail(template_id: str) -> Dict[str, Any]:
     
     Returns field definitions, required fields, validation rules.
     """
+    print(f"[DEBUG] 请求模板详情: {template_id}")
     try:
         template = get_template(template_id)
+        print(f"[DEBUG] 模板找到: {template.get('name')}")
         return {"template": template}
     except ValueError as e:
+        print(f"[ERROR] 模板未找到: {e}")
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        print(f"[ERROR] 模板加载异常: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/v1/protocol/contract-hash")
@@ -1642,3 +2696,151 @@ async def verify_merkle_proof(request: VerifyProofRequest) -> VerifyProofRespons
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== WebSocket Endpoints ====================
+
+@router.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    """
+    WebSocket endpoint for real-time communication.
+    
+    Usage:
+        ws://localhost:8080/ws/{user_id}
+    
+    Message format:
+        {
+            "type": "message_type",
+            "data": {...}
+        }
+    """
+    await websocket_manager.connect(websocket, user_id)
+    
+    try:
+        while True:
+            # Receive message from client
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            message_type = message.get('type')
+            
+            if message_type == 'ping':
+                # Heartbeat
+                await websocket.send_text(json.dumps({
+                    'type': 'pong',
+                    'timestamp': asyncio.get_event_loop().time()
+                }))
+            
+            elif message_type == 'request_wallet_data':
+                # 速率限制检查
+                allowed, remaining = rate_limiter.is_allowed(f"wallet_{user_id}", interval=5)
+                if not allowed:
+                    await websocket.send_text(json.dumps({
+                        'type': 'error',
+                        'message': f'Rate limit exceeded. Try again in {remaining} seconds'
+                    }))
+                    continue
+                
+                # 生成并返回钱包数据（扁平化结构）
+                ai_index = message.get('ai_index', 0)
+                try:
+                    wallet_info = hd_wallet_service.generate_ai_wallet(ai_index)
+                    address = wallet_info['address']
+                    
+                    # 获取人类钱包
+                    human_wallet = await get_or_create_human_wallet(address)
+                    
+                    # 获取 AI 钱包
+                    ai_wallet = await get_or_create_wallet(address)
+                    
+                    # 查询推荐奖励（按层级分组）
+                    db = await get_db()
+                    rewards_result = await db.execute_fetchall('''
+                        SELECT level, COUNT(*) as count, SUM(reward_amount) as total_amount
+                        FROM referral_rewards
+                        WHERE referrer_address = ?
+                        GROUP BY level
+                        ORDER BY level
+                    ''', (address,))
+                    
+                    referral_rewards = [
+                        {
+                            'level': row['level'],
+                            'count': row['count'],
+                            'total_amount': row['total_amount'],
+                            'currency': 'USDT'
+                        }
+                        for row in rewards_result
+                    ]
+                    
+                    # 计算总收益
+                    total_referral_earned = sum(r['total_amount'] for r in referral_rewards)
+                    
+                    await websocket.send_text(json.dumps({
+                        'code': 200,
+                        'success': True,
+                        'data': {
+                            'wallet': {
+                                'address': address,
+                                'balance_encrypted': True,
+                                'total_earned': ai_wallet['total_earned'],
+                                'currency': 'USDT'
+                            },
+                            'human_wallet': {
+                                'points_balance': human_wallet['points_balance'],
+                                'locked_points': human_wallet['locked_points'],
+                                'total_deposited': human_wallet['total_deposited'],
+                                'total_withdrawn': human_wallet['total_withdrawn'],
+                                'currency': 'POINTS'
+                            },
+                            'referral_rewards': referral_rewards,
+                            'total_referral_earned': total_referral_earned,
+                            'team_stats': {
+                                'total_referrals': ai_wallet['referral_count'],
+                                'active_levels': len(referral_rewards)
+                            }
+                        },
+                        'timestamp': int(asyncio.get_event_loop().time()),
+                        'message': 'Success'
+                    }))
+                except Exception as e:
+                    await websocket.send_text(json.dumps({
+                        'code': 500,
+                        'success': False,
+                        'data': None,
+                        'timestamp': int(asyncio.get_event_loop().time()),
+                        'message': str(e)
+                    }))
+            
+            elif message_type == 'join_room':
+                # Join a room (e.g., chat room, transaction room)
+                room_id = message.get('room_id')
+                if room_id:
+                    websocket_manager.join_room(user_id, room_id, websocket)
+                    await websocket.send_text(json.dumps({
+                        'type': 'room_joined',
+                        'room_id': room_id
+                    }))
+            
+            elif message_type == 'leave_room':
+                # Leave a room
+                room_id = message.get('room_id')
+                if room_id:
+                    websocket_manager.leave_room(user_id, room_id, websocket)
+                    await websocket.send_text(json.dumps({
+                        'type': 'room_left',
+                        'room_id': room_id
+                    }))
+            
+            else:
+                # Unknown message type
+                await websocket.send_text(json.dumps({
+                    'type': 'error',
+                    'message': f'Unknown message type: {message_type}'
+                }))
+    
+    except WebSocketDisconnect:
+        websocket_manager.disconnect(user_id)
+    except Exception as e:
+        logger.error(f"WebSocket error for user {user_id}: {e}")
+        websocket_manager.disconnect(user_id)

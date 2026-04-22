@@ -1,17 +1,17 @@
 ﻿<template>
   <div class="min-h-screen bg-gray-50">
     <div class="max-w-7xl mx-auto px-4 md:px-6 py-8">
-      <!-- Header -->
+      <!-- 头部 -->
       <div class="mb-8">
-        <h1 class="text-2xl md:text-3xl font-bold text-gray-900 mb-2">{{ $t('user.center') }}</h1>
-        <p class="text-sm md:text-base text-gray-600">Manage your account and services</p>
+        <h1 class="text-2xl md:text-3xl font-bold text-gray-900 mb-2">TEXT</h1>
+        <p class="text-sm md:text-base text-gray-600">管理你的账户和服务</p>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <!-- Sidebar Menu -->
+        <!-- 侧边栏菜单 -->
         <aside class="lg:col-span-1">
           <div class="bg-white rounded-lg shadow-sm overflow-hidden">
-            <!-- User Info -->
+            <!-- 用户信息 -->
             <div class="p-6 border-b border-gray-200">
               <div class="flex items-center space-x-4">
                 <div class="w-16 h-16 rounded-full bg-gradient-to-br from-purple-400 to-pink-400"></div>
@@ -19,13 +19,13 @@
                   <h3 class="font-semibold text-gray-900">{{ userStore.user?.name || 'User' }}</h3>
                   <p class="text-sm text-gray-600">{{ userStore.user?.email || 'user@example.com' }}</p>
                   <span class="inline-block mt-2 px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded-full">
-                    VIP Member
+                    VIP 会员
                   </span>
                 </div>
               </div>
             </div>
 
-            <!-- Menu Items -->
+            <!-- 菜单项 -->
             <nav class="p-4 space-y-1">
               <button
                 v-for="item in menuItems"
@@ -41,13 +41,22 @@
                 <i :class="item.icon"></i>
                 <span class="text-sm font-medium">{{ item.label }}</span>
               </button>
+              
+              <!-- 退出登录 -->
+              <button
+                @click="handleLogout"
+                class="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left transition-colors text-red-600 hover:bg-red-50 mt-4 border-t border-gray-200 pt-4"
+              >
+                <i class="fa-solid fa-sign-out-alt"></i>
+                <span class="text-sm font-medium">退出登录</span>
+              </button>
             </nav>
           </div>
         </aside>
 
-        <!-- Main Content -->
+        <!-- 主内容 -->
         <main class="lg:col-span-3">
-          <!-- Balance Overview -->
+          <!-- 概览 -->
           <div v-if="activeSection === 'overview'" class="space-y-6">
             <!-- Stats Cards -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -59,7 +68,7 @@
                   <span class="text-xs text-gray-500">USDT</span>
                 </div>
                 <h3 class="text-2xl font-bold text-gray-900 mb-1">1,234.56</h3>
-                <p class="text-sm text-gray-600">{{ $t('user.balance') }}</p>
+                <p class="text-sm text-gray-600">TEXT</p>
               </div>
 
               <div class="bg-white rounded-lg shadow-sm p-6">
@@ -70,7 +79,7 @@
                   <span class="text-xs text-green-600 font-semibold">Active</span>
                 </div>
                 <h3 class="text-2xl font-bold text-gray-900 mb-1">VIP</h3>
-                <p class="text-sm text-gray-600">{{ $t('user.memberLevel') }}</p>
+                <p class="text-sm text-gray-600">TEXT</p>
               </div>
 
               <div class="bg-white rounded-lg shadow-sm p-6">
@@ -78,32 +87,32 @@
                   <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
                     <i class="fa-solid fa-shopping-bag text-green-600 text-xl"></i>
                   </div>
-                  <span class="text-xs text-gray-500">Total</span>
+                  <span class="text-xs text-gray-500">总计</span>
                 </div>
                 <h3 class="text-2xl font-bold text-gray-900 mb-1">28</h3>
-                <p class="text-sm text-gray-600">My Products</p>
+                <p class="text-sm text-gray-600">我的产品</p>
               </div>
             </div>
 
-            <!-- Quick Actions -->
+            <!-- 快捷操作 -->
             <div class="bg-white rounded-lg shadow-sm p-6">
-              <h3 class="text-lg font-bold text-gray-900 mb-4">Quick Actions</h3>
+              <h3 class="text-lg font-bold text-gray-900 mb-4">快捷操作</h3>
               <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <button @click="activeSection = 'recharge'" class="p-4 border border-gray-200 rounded-lg hover:border-gray-900 hover:bg-gray-50 transition-all text-center">
                   <i class="fa-solid fa-plus-circle text-2xl text-blue-600 mb-2"></i>
-                  <p class="text-sm font-medium text-gray-900">{{ $t('user.recharge') }}</p>
+                  <p class="text-sm font-medium text-gray-900">TEXT</p>
                 </button>
                 <button @click="activeSection = 'withdraw'" class="p-4 border border-gray-200 rounded-lg hover:border-gray-900 hover:bg-gray-50 transition-all text-center">
                   <i class="fa-solid fa-minus-circle text-2xl text-green-600 mb-2"></i>
-                  <p class="text-sm font-medium text-gray-900">{{ $t('user.withdraw') }}</p>
+                  <p class="text-sm font-medium text-gray-900">TEXT</p>
                 </button>
                 <button @click="activeSection = 'products'" class="p-4 border border-gray-200 rounded-lg hover:border-gray-900 hover:bg-gray-50 transition-all text-center">
                   <i class="fa-solid fa-box text-2xl text-purple-600 mb-2"></i>
-                  <p class="text-sm font-medium text-gray-900">{{ $t('user.myProducts') }}</p>
+                  <p class="text-sm font-medium text-gray-900">TEXT</p>
                 </button>
                 <button @click="activeSection = 'services'" class="p-4 border border-gray-200 rounded-lg hover:border-gray-900 hover:bg-gray-50 transition-all text-center">
                   <i class="fa-solid fa-concierge-bell text-2xl text-orange-600 mb-2"></i>
-                  <p class="text-sm font-medium text-gray-900">{{ $t('user.myServices') }}</p>
+                  <p class="text-sm font-medium text-gray-900">TEXT</p>
                 </button>
               </div>
             </div>
@@ -111,7 +120,7 @@
 
           <!-- Recharge -->
           <div v-if="activeSection === 'recharge'" class="bg-white rounded-lg shadow-sm p-6">
-            <h3 class="text-lg font-bold text-gray-900 mb-6">{{ $t('user.recharge') }}</h3>
+            <h3 class="text-lg font-bold text-gray-900 mb-6">TEXT</h3>
             
             <div class="space-y-6">
               <div>
@@ -146,7 +155,7 @@
 
           <!-- Withdraw -->
           <div v-if="activeSection === 'withdraw'" class="bg-white rounded-lg shadow-sm p-6">
-            <h3 class="text-lg font-bold text-gray-900 mb-6">{{ $t('user.withdraw') }}</h3>
+            <h3 class="text-lg font-bold text-gray-900 mb-6">TEXT</h3>
             
             <div class="space-y-6">
               <div class="p-4 bg-blue-50 rounded-lg">
@@ -181,7 +190,7 @@
 
           <!-- My Products -->
           <div v-if="activeSection === 'products'" class="bg-white rounded-lg shadow-sm p-6">
-            <h3 class="text-lg font-bold text-gray-900 mb-6">{{ $t('user.myProducts') }}</h3>
+            <h3 class="text-lg font-bold text-gray-900 mb-6">TEXT</h3>
             
             <div class="space-y-4">
               <div v-for="product in myProducts" :key="product.id" class="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-400 transition-colors">
@@ -205,7 +214,7 @@
 
           <!-- My Services -->
           <div v-if="activeSection === 'services'" class="bg-white rounded-lg shadow-sm p-6">
-            <h3 class="text-lg font-bold text-gray-900 mb-6">{{ $t('user.myServices') }}</h3>
+            <h3 class="text-lg font-bold text-gray-900 mb-6">TEXT</h3>
             
             <div class="space-y-4">
               <div v-for="service in myServices" :key="service.id" class="p-4 border border-gray-200 rounded-lg">
@@ -232,7 +241,7 @@
 
           <!-- Customer Support -->
           <div v-if="activeSection === 'support'" class="bg-white rounded-lg shadow-sm p-6">
-            <h3 class="text-lg font-bold text-gray-900 mb-6">{{ $t('user.customerSupport') }}</h3>
+            <h3 class="text-lg font-bold text-gray-900 mb-6">TEXT</h3>
             
             <div class="space-y-6">
               <div class="p-6 bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg">
@@ -265,6 +274,75 @@
               </div>
             </div>
           </div>
+
+          <!-- 推荐系统 -->
+          <div v-if="activeSection === 'referral'" class="bg-white rounded-lg shadow-sm p-6">
+            <h3 class="text-lg font-bold text-gray-900 mb-6">推荐计划</h3>
+            
+            <div class="space-y-6">
+              <div class="p-6 bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg border border-purple-200">
+                <h4 class="font-bold text-gray-900 mb-2">邀请他人赚取奖励</h4>
+                <p class="text-sm text-gray-600 mb-4">分享你的推荐链接给其他人，当他们注册并进行交易时，你可以获得佣金。</p>
+                
+                <div class="bg-white rounded-lg p-4 mb-4">
+                  <label class="block text-sm font-medium text-gray-700 mb-2">你的推荐链接</label>
+                  <div class="flex gap-2">
+                    <input 
+                      type="text" 
+                      :value="referralLink" 
+                      readonly
+                      class="flex-1 px-4 py-2 border border-gray-300 rounded-lg bg-gray-50 text-sm font-mono"
+                    />
+                    <button 
+                      @click="copyReferralLink"
+                      class="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors text-sm font-medium"
+                    >
+                      {{ copied ? '已复制!' : '复制链接' }}
+                    </button>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-3 gap-4">
+                  <div class="text-center p-3 bg-purple-50 rounded-lg">
+                    <p class="text-2xl font-bold text-purple-600">0</p>
+                    <p class="text-xs text-gray-600">总推荐人数</p>
+                  </div>
+                  <div class="text-center p-3 bg-pink-50 rounded-lg">
+                    <p class="text-2xl font-bold text-pink-600">0</p>
+                    <p class="text-xs text-gray-600">活跃推荐</p>
+                  </div>
+                  <div class="text-center p-3 bg-blue-50 rounded-lg">
+                    <p class="text-2xl font-bold text-blue-600">0 USDT</p>
+                    <p class="text-xs text-gray-600">总收益</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="p-4 border border-gray-200 rounded-lg">
+                <h4 class="font-semibold text-gray-900 mb-3">如何运作</h4>
+                <div class="space-y-3 text-sm text-gray-600">
+                  <div class="flex items-start space-x-3">
+                    <div class="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <span class="text-xs font-bold text-purple-600">1</span>
+                    </div>
+                    <p>分享你的推荐链接给其他人</p>
+                  </div>
+                  <div class="flex items-start space-x-3">
+                    <div class="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <span class="text-xs font-bold text-purple-600">2</span>
+                    </div>
+                    <p>他们通过你的链接注册</p>
+                  </div>
+                  <div class="flex items-start space-x-3">
+                    <div class="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <span class="text-xs font-bold text-purple-600">3</span>
+                    </div>
+                    <p>从他们的交易中获得佣金</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </main>
       </div>
     </div>
@@ -272,7 +350,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 
@@ -285,12 +363,13 @@ const withdrawAmount = ref('')
 const withdrawAddress = ref('')
 
 const menuItems = [
-  { id: 'overview', label: 'Overview', icon: 'fa-solid fa-home' },
-  { id: 'recharge', label: 'Recharge', icon: 'fa-solid fa-plus-circle' },
-  { id: 'withdraw', label: 'Withdraw', icon: 'fa-solid fa-minus-circle' },
-  { id: 'products', label: 'My Products', icon: 'fa-solid fa-box' },
-  { id: 'services', label: 'My Services', icon: 'fa-solid fa-concierge-bell' },
-  { id: 'support', label: 'Customer Support', icon: 'fa-solid fa-headset' }
+  { id: 'overview', label: '概览', icon: 'fa-solid fa-home' },
+  { id: 'recharge', label: '充值', icon: 'fa-solid fa-plus-circle' },
+  { id: 'withdraw', label: '提现', icon: 'fa-solid fa-minus-circle' },
+  { id: 'products', label: '我的产品', icon: 'fa-solid fa-box' },
+  { id: 'services', label: '我的服务', icon: 'fa-solid fa-concierge-bell' },
+  { id: 'referral', label: '推荐计划', icon: 'fa-solid fa-share-nodes' },
+  { id: 'support', label: '客户支持', icon: 'fa-solid fa-headset' }
 ]
 
 const myProducts = ref([
@@ -312,5 +391,33 @@ const getStatusColor = (status) => {
     cancelled: 'bg-red-100 text-red-800'
   }
   return colors[status] || 'bg-gray-100 text-gray-800'
+}
+
+// Referral link
+const copied = ref(false)
+
+const referralLink = computed(() => {
+  console.log('userStore.user:', userStore.user)
+  // Use AI wallet address as referral code
+  const aiAddress = userStore.user?.ai_wallet_address
+  console.log('AI wallet address:', aiAddress)
+  if (!aiAddress) return ''
+  const baseUrl = window.location.origin
+  return `${baseUrl}/login?ref=${aiAddress}`
+})
+
+const copyReferralLink = () => {
+  if (!referralLink.value) return
+  navigator.clipboard.writeText(referralLink.value)
+  copied.value = true
+  setTimeout(() => {
+    copied.value = false
+  }, 2000)
+}
+
+// 退出登录
+const handleLogout = () => {
+  userStore.logout()
+  router.push('/login')
 }
 </script>

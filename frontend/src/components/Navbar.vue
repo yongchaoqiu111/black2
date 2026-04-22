@@ -6,7 +6,7 @@
       <div class="flex items-center space-x-3">
         <!-- Logo (Mobile Only) -->
         <router-link to="/" class="md:hidden text-xl font-bold text-gray-900 hover:text-gray-700 transition-colors">
-          {{ $t('nav.logo') }}
+          Black2
         </router-link>
 
         <!-- Search Box -->
@@ -88,9 +88,14 @@
         </div>
 
         <!-- Cart -->
-        <router-link to="/cart" class="p-2.5 hover:bg-gray-100 rounded-full transition-colors relative group" title="Cart">
+        <router-link to="/cart" class="p-2.5 hover:bg-gray-100 rounded-full transition-colors relative group" title="购物车">
           <i class="fa-solid fa-shopping-cart text-lg text-gray-600 group-hover:text-gray-900 transition-colors"></i>
           <span v-if="cartStore.totalItems > 0" class="absolute -top-0.5 -right-0.5 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold border-2 border-white">{{ cartStore.totalItems }}</span>
+        </router-link>
+
+        <!-- Orders -->
+        <router-link to="/orders" class="p-2.5 hover:bg-gray-100 rounded-full transition-colors relative group" title="我的订单">
+          <i class="fa-solid fa-receipt text-lg text-gray-600 group-hover:text-purple-600 transition-colors"></i>
         </router-link>
 
         <!-- Chat -->
@@ -136,20 +141,23 @@
     <div v-if="mobileMenuOpen" class="md:hidden bg-white border-t border-gray-200">
       <div class="px-4 py-3 space-y-3">
         <router-link to="/shop" class="block text-sm font-medium text-gray-700 hover:text-gray-900 py-2 transition-colors">
-          {{ $t('nav.shop') }}
+          商城
+        </router-link>
+        <router-link to="/orders" class="block text-sm font-medium text-gray-700 hover:text-gray-900 py-2 transition-colors">
+          我的订单
         </router-link>
         <router-link to="/upload" class="block text-sm font-medium text-gray-700 hover:text-gray-900 py-2 transition-colors">
-          {{ $t('nav.sell') }}
+          发布
         </router-link>
         <router-link to="/about" class="block text-sm font-medium text-gray-700 hover:text-gray-900 py-2 transition-colors">
-          {{ $t('nav.about') }}
+          关于
         </router-link>
         <div class="pt-3 border-t border-gray-200">
           <router-link to="/login" class="block text-sm font-medium text-gray-700 hover:text-gray-900 py-2 transition-colors">
-            {{ $t('auth.login') }}
+            登录
           </router-link>
           <router-link to="/register" class="block px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors mt-2">
-            {{ $t('auth.register') }}
+            注册
           </router-link>
         </div>
       </div>
@@ -159,30 +167,20 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { useUserStore } from '@/stores/user'
 import { useCartStore } from '@/stores/cart'
 
-const { locale } = useI18n()
 const userStore = useUserStore()
 const cartStore = useCartStore()
 const mobileMenuOpen = ref(false)
 const showLangDropdown = ref(false)
 
-// Language options
-const languages = [
-  { code: 'zh', name: '中文', flag: '🇨🇳', icon: 'fa-solid fa-globe-asia' },
-  { code: 'en', name: 'English', flag: '🇺🇸', icon: 'fa-solid fa-globe-americas' }
-]
+// Language options - disabled
+const languages = []
 
-const currentLanguageIcon = computed(() => {
-  const lang = languages.find(l => l.code === locale.value)
-  return lang ? lang.icon : 'fa-solid fa-globe'
-})
+const currentLanguageIcon = computed(() => 'fa-solid fa-globe')
 
 const selectLanguage = (code) => {
-  locale.value = code
-  localStorage.setItem('locale', code)
   showLangDropdown.value = false
 }
 
@@ -201,3 +199,4 @@ onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
 })
 </script>
+

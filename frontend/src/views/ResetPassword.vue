@@ -12,14 +12,14 @@
           <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
             <i class="fa-solid fa-lock text-2xl text-blue-600"></i>
           </div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-2">{{ $t('auth.forgotPassword') }}</h2>
-          <p class="text-sm text-gray-600">{{ $t('auth.resetPasswordDesc') }}</p>
+          <h2 class="text-2xl font-bold text-gray-900 mb-2">TEXT</h2>
+          <p class="text-sm text-gray-600">TEXT</p>
         </div>
 
         <form @submit.prevent="handleForgotPassword" class="space-y-4">
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">
-              {{ $t('auth.email') }}
+              TEXT
             </label>
             <input
               type="email"
@@ -36,7 +36,7 @@
             class="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
           >
             <i v-if="loading" class="fa-solid fa-spinner fa-spin mr-2"></i>
-            {{ $t('auth.sendResetLink') }}
+            TEXT
           </button>
         </form>
 
@@ -68,7 +68,7 @@
         <div class="mt-6 text-center">
           <router-link to="/login" class="text-sm text-gray-900 hover:underline flex items-center justify-center">
             <i class="fa-solid fa-arrow-left mr-2"></i>
-            {{ $t('auth.backToLogin') }}
+            TEXT
           </router-link>
         </div>
       </div>
@@ -79,14 +79,14 @@
           <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
             <i class="fa-solid fa-key text-2xl text-green-600"></i>
           </div>
-          <h2 class="text-2xl font-bold text-gray-900 mb-2">{{ $t('auth.resetPassword') }}</h2>
-          <p class="text-sm text-gray-600">{{ $t('auth.newPasswordPlaceholder') }}</p>
+          <h2 class="text-2xl font-bold text-gray-900 mb-2">TEXT</h2>
+          <p class="text-sm text-gray-600">TEXT</p>
         </div>
 
         <form @submit.prevent="handleResetPassword" class="space-y-4">
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">
-              {{ $t('auth.newPassword') }}
+              TEXT
             </label>
             <input
               type="password"
@@ -100,7 +100,7 @@
 
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">
-              {{ $t('auth.confirmPassword2') }}
+              TEXT
             </label>
             <input
               type="password"
@@ -118,7 +118,7 @@
             class="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
           >
             <i v-if="loading" class="fa-solid fa-spinner fa-spin mr-2"></i>
-            {{ $t('auth.resetPassword') }}
+            TEXT
           </button>
         </form>
 
@@ -136,7 +136,7 @@
         <div class="mt-6 text-center">
           <router-link to="/login" class="text-sm text-gray-900 hover:underline flex items-center justify-center">
             <i class="fa-solid fa-arrow-left mr-2"></i>
-            {{ $t('auth.backToLogin') }}
+            TEXT
           </router-link>
         </div>
       </div>

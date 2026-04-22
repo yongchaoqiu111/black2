@@ -250,9 +250,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
-import { translationService } from '@/utils/translation'
 import { 
   initSocket, 
   disconnectSocket,
@@ -268,7 +266,6 @@ import {
 // Navbar is now in Layout component
 
 const route = useRoute()
-const { locale } = useI18n()
 const authStore = useAuthStore()
 const searchQuery = ref('')
 const selectedConversation = ref(null)
@@ -412,25 +409,9 @@ const toggleTranslation = async (message) => {
     return
   }
 
-  // Start translation
-  message.translating = true
-  
-  try {
-    // Use translation service with auto-failover
-    const translatedText = await translationService.translate(
-      message.text,
-      'auto',  // Auto-detect source language
-      'en'     // Target language (English)
-    )
-    
-    message.translatedText = translatedText
-    message.showTranslation = true
-  } catch (error) {
-    console.error('Translation failed:', error)
-    alert('Translation service is currently unavailable. Please try again later.')
-  } finally {
-    message.translating = false
-  }
+  // Translation disabled
+  message.translating = false
+  message.showTranslation = false
 }
 
 // 打开官方客服聊天

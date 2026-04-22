@@ -19,7 +19,7 @@
                 : 'text-gray-500 hover:text-gray-700'
             ]"
           >
-            {{ $t('auth.login') }}
+            登录
           </button>
           <button
             @click="activeTab = 'register'"
@@ -30,14 +30,14 @@
                 : 'text-gray-500 hover:text-gray-700'
             ]"
           >
-            {{ $t('auth.register') }}
+            注册
           </button>
         </div>
 
         <!-- Login Form -->
         <div v-if="activeTab === 'login'" class="p-6 md:p-8">
-          <h2 class="text-2xl font-bold text-gray-900 mb-2">{{ $t('auth.signInToAccount') }}</h2>
-          <p class="text-sm text-gray-600 mb-6">{{ $t('auth.orLoginWith') }}</p>
+          <h2 class="text-2xl font-bold text-gray-900 mb-2">欢迎回来</h2>
+          <p class="text-sm text-gray-600 mb-6">登录您的账户</p>
 
           <!-- Error Message -->
           <div v-if="loginError" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
@@ -47,26 +47,26 @@
           <form @submit.prevent="handleLogin" class="space-y-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-2">
-                {{ $t('auth.email') }}
+                邮箱
               </label>
               <input
                 type="email"
                 v-model="loginForm.email"
                 required
-                :placeholder="$t('auth.emailPlaceholder')"
+                placeholder="请输入邮箱"
                 class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-900 focus:ring-2 focus:ring-gray-200 transition-all"
               />
             </div>
 
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-2">
-                {{ $t('auth.password') }}
+                密码
               </label>
               <input
                 type="password"
                 v-model="loginForm.password"
                 required
-                :placeholder="$t('auth.passwordPlaceholder')"
+                placeholder="请输入密码"
                 class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-900 focus:ring-2 focus:ring-gray-200 transition-all"
               />
             </div>
@@ -74,9 +74,9 @@
             <div class="flex items-center justify-between">
               <label class="flex items-center">
                 <input type="checkbox" v-model="loginForm.rememberMe" class="w-4 h-4 text-gray-900 border-gray-300 rounded" />
-                <span class="ml-2 text-sm text-gray-600">{{ $t('auth.rememberMe') }}</span>
+                <span class="ml-2 text-sm text-gray-600">记住我</span>
               </label>
-              <router-link to="/forgot-password" class="text-sm text-gray-900 hover:underline">{{ $t('auth.forgotPassword') }}</router-link>
+              <router-link to="/forgot-password" class="text-sm text-gray-900 hover:underline">忘记密码?</router-link>
             </div>
 
             <button
@@ -85,7 +85,7 @@
               class="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
             >
               <i v-if="loading" class="fa-solid fa-spinner fa-spin mr-2"></i>
-              {{ $t('auth.login') }}
+              登录
             </button>
           </form>
 
@@ -117,8 +117,8 @@
         <div v-if="activeTab === 'register'" class="p-6 md:p-8">
           <!-- Step 1: Email & Password -->
           <div v-if="registerStep === 1">
-            <h2 class="text-2xl font-bold text-gray-900 mb-2">{{ $t('auth.createAccount') }}</h2>
-            <p class="text-sm text-gray-600 mb-6">{{ $t('auth.joinMarketplace') }}</p>
+            <h2 class="text-2xl font-bold text-gray-900 mb-2">创建账户</h2>
+            <p class="text-sm text-gray-600 mb-6">开始您的交易之旅</p>
 
             <!-- Error Message -->
             <div v-if="registerError" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
@@ -128,41 +128,50 @@
             <form @submit.prevent="handleRegister" class="space-y-4">
               <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">
-                  {{ $t('auth.email') }}
+                  邮箱
                 </label>
                 <input
                   type="email"
                   v-model="registerForm.email"
                   required
-                  :placeholder="$t('auth.emailPlaceholder')"
+                  placeholder="请输入邮箱"
                   class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-900 focus:ring-2 focus:ring-gray-200 transition-all"
                 />
               </div>
 
               <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">
-                  {{ $t('auth.password') }}
+                  密码
                 </label>
                 <input
                   type="password"
                   v-model="registerForm.password"
                   required
-                  :placeholder="$t('auth.passwordPlaceholder')"
+                  placeholder="请输入密码"
                   class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-900 focus:ring-2 focus:ring-gray-200 transition-all"
                 />
               </div>
 
               <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">
-                  {{ $t('auth.confirmPassword') }}
+                  确认密码
                 </label>
                 <input
                   type="password"
                   v-model="registerForm.confirmPassword"
                   required
-                  :placeholder="$t('auth.confirmPasswordPlaceholder')"
+                  placeholder="请再次输入密码"
                   class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-900 focus:ring-2 focus:ring-gray-200 transition-all"
                 />
+              </div>
+
+              <!-- Referrer Info Display -->
+              <div v-if="referrerFromUrl" class="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <p class="text-sm text-blue-800">
+                  <i class="fa-solid fa-link mr-2"></i>
+                  <strong>推荐人：</strong>{{ referrerFromUrl.substring(0, 10) }}...{{ referrerFromUrl.substring(referrerFromUrl.length - 8) }}
+                </p>
+                <p class="text-xs text-blue-600 mt-1">您将通过此推荐链接注册</p>
               </div>
 
               <button
@@ -171,7 +180,7 @@
                 class="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
               >
                 <i v-if="loading" class="fa-solid fa-spinner fa-spin mr-2"></i>
-                {{ $t('auth.register') }}
+                注册
               </button>
             </form>
           </div>
@@ -182,9 +191,9 @@
               <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
                 <i class="fa-solid fa-envelope text-2xl text-blue-600"></i>
               </div>
-              <h2 class="text-2xl font-bold text-gray-900 mb-2">{{ $t('auth.verifyEmail') }}</h2>
+              <h2 class="text-2xl font-bold text-gray-900 mb-2">邮箱验证</h2>
               <p class="text-sm text-gray-600">
-                {{ $t('auth.verificationCodeSent') }}<br>
+                验证码已发送到您的邮箱<br>
                 <strong>{{ registerForm.email }}</strong>
               </p>
             </div>
@@ -192,14 +201,14 @@
             <form @submit.prevent="handleVerifyEmail" class="space-y-4">
               <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">
-                  {{ $t('auth.verificationCode') }}
+                  验证码
                 </label>
                 <input
                   type="text"
                   v-model="verificationCode"
                   required
                   maxlength="6"
-                  :placeholder="$t('auth.verificationCodePlaceholder')"
+                  placeholder="请输入6位验证码"
                   class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-gray-900 focus:ring-2 focus:ring-gray-200 transition-all text-center text-2xl tracking-widest"
                 />
               </div>
@@ -210,7 +219,7 @@
                 class="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
               >
                 <i v-if="loading" class="fa-solid fa-spinner fa-spin mr-2"></i>
-                {{ $t('auth.verifyEmail') }}
+                验证并注册
               </button>
 
               <button
@@ -219,7 +228,7 @@
                 :disabled="resendDisabled"
                 class="w-full py-2 text-sm text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-50"
               >
-                {{ resendDisabled ? `${countdown}s` : $t('auth.resendCode') }}
+                {{ resendDisabled ? `${countdown}s` : '重新发送验证码' }}
               </button>
             </form>
 
@@ -262,11 +271,12 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 
 const activeTab = ref('login')
@@ -281,6 +291,9 @@ const mockCode = ref('')
 const resendDisabled = ref(false)
 const countdown = ref(60)
 
+// Auto-extract referrer from URL query parameter
+const referrerFromUrl = ref('')
+
 const loginForm = ref({
   email: '',
   password: '',
@@ -291,6 +304,16 @@ const registerForm = ref({
   email: '',
   password: '',
   confirmPassword: ''
+})
+
+// Extract referrer address from URL on component mount
+onMounted(() => {
+  const refParam = route.query.ref
+  if (refParam && typeof refParam === 'string') {
+    referrerFromUrl.value = refParam
+    activeTab.value = 'register' // Auto-switch to register tab when ref is present
+    console.log('Detected referrer from URL:', referrerFromUrl.value)
+  }
 })
 
 // ==================== Login ====================
@@ -318,8 +341,7 @@ const handleLogin = async () => {
 
     // Save token and user info
     localStorage.setItem('token', data.token)
-    userStore.isLoggedIn = true
-    userStore.user = data.user
+    userStore.login(data.user)
     
     router.push('/shop')
   } catch (err) {
@@ -347,7 +369,8 @@ const handleRegister = async () => {
       },
       body: JSON.stringify({
         email: registerForm.value.email,
-        password: registerForm.value.password
+        password: registerForm.value.password,
+        referrer_address: referrerFromUrl.value || null
       })
     })
 
@@ -387,7 +410,8 @@ const handleVerifyEmail = async () => {
       body: JSON.stringify({
         email: registerForm.value.email,
         code: verificationCode.value,
-        password: registerForm.value.password
+        password: registerForm.value.password,
+        referrer_address: referrerFromUrl.value || null
       })
     })
 
@@ -399,8 +423,7 @@ const handleVerifyEmail = async () => {
 
     // Save token and user info
     localStorage.setItem('token', data.token)
-    userStore.isLoggedIn = true
-    userStore.user = data.user
+    userStore.login(data.user)
     
     router.push('/shop')
   } catch (err) {
@@ -425,7 +448,8 @@ const resendCode = async () => {
       },
       body: JSON.stringify({
         email: registerForm.value.email,
-        password: registerForm.value.password
+        password: registerForm.value.password,
+        referrer_address: referrerFromUrl.value || null
       })
     })
 

@@ -1,0 +1,596 @@
+一、项目结构
+text
+reputation/
+├── __init__.py
+├── config.py           # 配置
+├── models.py           # 数据模型
+├── shard.py            # 碎片化核心
+├── storage.py          # 分布式存储
+├── reputation.py       # 信誉核心逻辑
+├── api.py              # API 接口
+└── utils.py            # 工具函数
+二、配置文件 config.py
+python
+import os
+
+class Config:
+    # 你的官方钱包地址（品牌标识，写死）
+    FOUNDER_WALLET = "0x1234567890abcdef1234567890abcdef12345678"
+    
+    # 当前算法版本（每天/每周改这个数字就行）
+    CURRENT_ALGO_VERSION = 1
+    
+    # 碎片数量（5个碎片才能还原）
+    TOTAL_SHARDS = 5
+    
+    # 副本数量（每个碎片存3份）
+    REPLICA_COUNT = 3
+    
+    # 积分规则
+    POINTS_CONFIG = {
+        "founder_multiplier": 1000,      # 创始人1000倍
+        "base_reward": 1,                # 基础1分
+        "event_reward": 10,              # 写入交易+10分
+        "rating_reward": 5,              # 写入评价+5分
+    }
+    
+    # 信誉分计算公式
+    REPUTATION_WEIGHTS = {
+        "buy_success_rate": 0.30,
+        "pay_success_rate": 0.20,
+        "positive_rate": 0.40,
+        "no_violation": 0.10,
+    }
+    
+    # 存储节点
+    STORAGE_NODES = [
+        {"name": "ipfs", "url": "https://ipfs.io/api/v0/add"},
+        {"name": "github", "url": "https://api.github.com/repos/your/repo/contents"},
+        {"name": "local", "path": "./shards/"},
+    ]
+三、数据模型 models.py
+python
+from datetime import datetime
+from typing import Optional, List
+from pydantic import BaseModel
+
+class WalletProfile(BaseModel):
+    """钱包信誉档案"""
+    wallet_id: str
+    score: int = 60                      # 信誉分 0-100
+    level: str = "medium"                # high/medium/low/critical
+    total_buys: int = 0
+    success_buys: int = 0
+    total_sells: int = 0
+    success_sells: int = 0
+    positive_count: int = 0
+    neutral_count: int = 0
+    negative_count: int = 0
+    violation_count: int = 0
+    is_frozen: bool = False
+    updated_at: datetime = datetime.now()
+
+class Transaction(BaseModel):
+    """交易记录"""
+    tx_id: str
+    buyer_wallet: str
+    seller_wallet: str
+    amount: float
+    status: str                           # pending/completed/disputed
+    rating: Optional[str] = None          # positive/neutral/negative
+    created_at: datetime = datetime.now()
+
+class PointsAccount(BaseModel):
+    """积分账户"""
+    wallet_id: str
+    balance: int = 0
+    total_earned: int = 0
+    total_burned: int = 0
+    updated_at: datetime = datetime.now()
+四、碎片化核心 shard.py
+python
+import json
+import random
+import hashlib
+import base64
+from typing import List, Dict, Any
+from config import Config
+
+class ShardAlgorithm:
+    """碎片化算法 - 你可以天天换"""
+    
+    def __init__(self, version: int, seed: str):
+        self.version = version
+        self.seed = seed + str(version)
+    
+    def shard(self, data: Dict[str, Any]) -> List[str]:
+        """打碎成5个碎片"""
+        # 1. 序列化
+        json_str = json.dumps(data, sort_keys=True)
+        
+        # 2. 转字符列表
+        chars = list(json_str)
+        
+        # 3. 打乱顺序
+        random.seed(self.seed)
+        random.shuffle(chars)
+        
+        # 4. 分成5份
+        total = len(chars)
+        size = total // Config.TOTAL_SHARDS
+        shards = []
+        
+        for i in range(Config.TOTAL_SHARDS):
+            start = i * size
+            end = start + size if i < Config.TOTAL_SHARDS - 1 else total
+            content = ''.join(chars[start:end])
+            
+            # 5. 混淆
+            obfuscated = self._obfuscate(content, i)
+            shards.append(obfuscated)
+        
+        return shards
+    
+    def reconstruct(self, fragments: List[str]) -> Dict[str, Any]:
+        """从5个碎片还原"""
+        cleaned = []
+        for i, frag in enumerate(fragments):
+            content = self._deobfuscate(frag, i)
+            cleaned.append(content)
+        
+        combined = ''.join(cleaned)
+        return json.loads(combined)
+    
+    def _obfuscate(self, content: str, idx: int) -> str:
+        """混淆"""
+        prefix = hashlib.md5(f"{self.seed}_{idx}".encode()).hexdigest()[:8]
+        suffix = hashlib.md5(f"{idx}_{self.seed}".encode()).hexdigest()[:8]
+        encoded = base64.b64encode(content.encode()).decode()
+        return f"v{self.version}_{prefix}_{encoded}_{suffix}"
+    
+    def _deobfuscate(self, obfuscated: str, idx: int) -> str:
+        """去混淆"""
+        parts = obfuscated.split('_')
+        if len(parts) >= 4:
+            encoded = parts[2]
+            return base64.b64decode(encoded).decode()
+        return ""
+
+
+def get_algorithm(version: int = None):
+    """获取算法实例"""
+    if version is None:
+        version = Config.CURRENT_ALGO_VERSION
+    return ShardAlgorithm(version, Config.FOUNDER_WALLET)
+五、分布式存储 storage.py
+python
+import os
+import json
+import requests
+from typing import List, Dict
+from config import Config
+
+class DistributedStorage:
+    """分布式存储管理"""
+    
+    def __init__(self):
+        self.shard_map = {}  # data_id -> {shard_index: [locations]}
+    
+    def store(self, data_id: str, shards: List[str]) -> Dict[int, List[str]]:
+        """存储5个碎片到不同节点"""
+        locations = {}
+        
+        for i, shard in enumerate(shards):
+            # 每个碎片存3个副本
+            shard_locations = []
+            for replica in range(Config.REPLICA_COUNT):
+                # 轮流选择存储节点
+                node = Config.STORAGE_NODES[(i + replica) % len(Config.STORAGE_NODES)]
+                location = self._upload_to_node(shard, node, i)
+                shard_locations.append(location)
+            locations[i] = shard_locations
+        
+        self.shard_map[data_id] = locations
+        return locations
+    
+    def retrieve(self, data_id: str) -> List[str]:
+        """从分布式节点取回5个碎片"""
+        locations = self.shard_map.get(data_id)
+        if not locations:
+            raise ValueError(f"Data {data_id} not found")
+        
+        fragments = []
+        for i in range(Config.TOTAL_SHARDS):
+            shard_locations = locations.get(i, [])
+            fragment = None
+            for loc in shard_locations:
+                fragment = self._download_from_node(loc)
+                if fragment:
+                    break
+            if fragment is None:
+                raise ValueError(f"Shard {i} for {data_id} not available")
+            fragments.append(fragment)
+        
+        return fragments
+    
+    def _upload_to_node(self, shard: str, node: Dict, idx: int) -> str:
+        """上传到指定节点"""
+        if node["name"] == "local":
+            path = f"{node['path']}shard_{idx}_{hash(shard)}.txt"
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(shard)
+            return f"local://{path}"
+        
+        elif node["name"] == "ipfs":
+            # 简化的IPFS上传
+            try:
+                response = requests.post(
+                    node["url"],
+                    files={"file": shard.encode()}
+                )
+                if response.status_code == 200:
+                    hash_val = response.json().get("Hash")
+                    return f"ipfs://{hash_val}"
+            except:
+                pass
+            return f"ipfs://fallback_{hash(shard)}"
+        
+        elif node["name"] == "github":
+            # 简化的GitHub上传
+            return f"github://{hash(shard)}"
+        
+        return f"unknown://{hash(shard)}"
+    
+    def _download_from_node(self, location: str) -> str:
+        """从节点下载"""
+        if location.startswith("local://"):
+            path = location[8:]
+            with open(path, "r") as f:
+                return f.read()
+        
+        elif location.startswith("ipfs://"):
+            # 简化的IPFS下载
+            return "mock_shard_content"
+        
+        return None
+
+
+storage = DistributedStorage()
+六、信誉核心逻辑 reputation.py
+python
+from typing import Dict, Optional
+from datetime import datetime
+from models import WalletProfile, PointsAccount
+from config import Config
+
+class ReputationSystem:
+    """信誉系统核心"""
+    
+    def __init__(self):
+        # 内存存储（生产环境用数据库）
+        self.profiles: Dict[str, WalletProfile] = {}
+        self.points: Dict[str, PointsAccount] = {}
+    
+    def get_profile(self, wallet_id: str) -> WalletProfile:
+        """获取钱包信誉档案"""
+        if wallet_id not in self.profiles:
+            self.profiles[wallet_id] = WalletProfile(wallet_id=wallet_id)
+        return self.profiles[wallet_id]
+    
+    def get_points(self, wallet_id: str) -> PointsAccount:
+        """获取积分余额"""
+        if wallet_id not in self.points:
+            self.points[wallet_id] = PointsAccount(wallet_id=wallet_id)
+        return self.points[wallet_id]
+    
+    def calculate_reputation_score(self, profile: WalletProfile) -> int:
+        """计算信誉分"""
+        # 购买成功率
+        buy_rate = profile.success_buys / max(profile.total_buys, 1)
+        
+        # 卖家好评率
+        total_ratings = profile.positive_count + profile.neutral_count + profile.negative_count
+        positive_rate = profile.positive_count / max(total_ratings, 1)
+        
+        # 无违规
+        no_violation = 1.0 if profile.violation_count == 0 else 0.5
+        
+        # 加权计算
+        score = (
+            buy_rate * Config.REPUTATION_WEIGHTS["buy_success_rate"] +
+            positive_rate * Config.REPUTATION_WEIGHTS["positive_rate"] +
+            no_violation * Config.REPUTATION_WEIGHTS["no_violation"]
+        ) * 100
+        
+        # 冻结检查
+        if profile.is_frozen:
+            score = min(score, 20)
+        
+        return int(min(max(score, 0), 100))
+    
+    def update_profile(self, wallet_id: str, **kwargs):
+        """更新档案"""
+        profile = self.get_profile(wallet_id)
+        for key, value in kwargs.items():
+            if hasattr(profile, key):
+                setattr(profile, key, value)
+        profile.updated_at = datetime.now()
+        
+        # 重新计算信誉分
+        profile.score = self.calculate_reputation_score(profile)
+        
+        # 确定等级
+        if profile.score >= 80:
+            profile.level = "high"
+        elif profile.score >= 60:
+            profile.level = "medium"
+        elif profile.score >= 40:
+            profile.level = "low"
+        else:
+            profile.level = "critical"
+        
+        return profile
+    
+    def add_reward_points(self, wallet_id: str, source: str, amount: int = None):
+        """增加积分奖励"""
+        points = self.get_points(wallet_id)
+        
+        # 创始人特权：1000倍
+        multiplier = Config.POINTS_CONFIG["founder_multiplier"] if wallet_id == Config.FOUNDER_WALLET else 1
+        
+        if amount is None:
+            if source == "event":
+                amount = Config.POINTS_CONFIG["event_reward"]
+            elif source == "rating":
+                amount = Config.POINTS_CONFIG["rating_reward"]
+            else:
+                amount = Config.POINTS_CONFIG["base_reward"]
+        
+        reward = amount * multiplier
+        points.balance += reward
+        points.total_earned += reward
+        points.updated_at = datetime.now()
+        
+        return reward
+    
+    def consume_points(self, wallet_id: str, amount: int) -> bool:
+        """消耗积分"""
+        points = self.get_points(wallet_id)
+        if points.balance >= amount:
+            points.balance -= amount
+            points.total_burned += amount
+            points.updated_at = datetime.now()
+            return True
+        return False
+    
+    def process_transaction(self, tx_id: str, buyer: str, seller: str, amount: float):
+        """处理交易"""
+        # 更新买家统计
+        buyer_profile = self.get_profile(buyer)
+        buyer_profile.total_buys += 1
+        
+        # 更新卖家统计
+        seller_profile = self.get_profile(seller)
+        seller_profile.total_sells += 1
+        
+        # 给双方积分奖励
+        self.add_reward_points(buyer, "event")
+        self.add_reward_points(seller, "event")
+        
+        # 重新计算信誉分
+        self.update_profile(buyer)
+        self.update_profile(seller)
+    
+    def process_rating(self, wallet_id: str, target_wallet: str, rating: str):
+        """处理评价"""
+        target_profile = self.get_profile(target_wallet)
+        
+        if rating == "positive":
+            target_profile.positive_count += 1
+        elif rating == "neutral":
+            target_profile.neutral_count += 1
+        elif rating == "negative":
+            target_profile.negative_count += 1
+        
+        # 给评价方积分奖励
+        self.add_reward_points(wallet_id, "rating")
+        
+        # 重新计算目标信誉分
+        self.update_profile(target_wallet)
+    
+    def check_trade_allowed(self, wallet_id: str) -> Dict:
+        """检查是否允许交易（/check接口）"""
+        profile = self.get_profile(wallet_id)
+        
+        return {
+            "allowed": not profile.is_frozen and profile.score >= 40,
+            "level": profile.level,
+            "score": profile.score,
+            "daily_buy_limit": None if profile.level in ["high", "medium"] else 10,
+            "daily_sell_limit": None if profile.level in ["high", "medium"] else 20,
+        }
+
+
+# 全局实例
+reputation = ReputationSystem()
+七、API 接口 api.py
+python
+from fastapi import FastAPI, HTTPException, Header
+from pydantic import BaseModel
+from typing import List, Optional
+from reputation import reputation
+from shard import get_algorithm
+from storage import storage
+import uuid
+
+app = FastAPI(title="AI信誉系统", version="1.0")
+
+class EventRequest(BaseModel):
+    event_type: str
+    buyer_wallet: str
+    seller_wallet: str
+    tx_id: Optional[str] = None
+    rating: Optional[str] = None
+    amount: float = 0
+
+class BatchCheckRequest(BaseModel):
+    wallets: List[str]
+
+
+@app.get("/v1/check/{wallet_id}")
+async def check_wallet(wallet_id: str, x_wallet_id: str = Header(None)):
+    """浅层查询 - 免费"""
+    result = reputation.check_trade_allowed(wallet_id)
+    return result
+
+
+@app.post("/v1/batch/check")
+async def batch_check(request: BatchCheckRequest, x_wallet_id: str = Header(None)):
+    """批量查询 - 50个以内免费"""
+    results = {}
+    for wallet_id in request.wallets[:50]:
+        results[wallet_id] = reputation.check_trade_allowed(wallet_id)
+    
+    billing = {}
+    if len(request.wallets) > 50:
+        billing = {"billable_count": len(request.wallets) - 50, "cost": 0.008}
+    
+    return {"results": results, "billing": billing}
+
+
+@app.get("/v1/profile/{wallet_id}")
+async def get_profile(wallet_id: str):
+    """轻量画像 - 免费"""
+    profile = reputation.get_profile(wallet_id)
+    points = reputation.get_points(wallet_id)
+    
+    return {
+        "score": profile.score,
+        "level": profile.level,
+        "buy_success_rate": profile.success_buys / max(profile.total_buys, 1),
+        "sell_success_rate": profile.success_sells / max(profile.total_sells, 1),
+        "positive_rate": profile.positive_count / max(profile.positive_count + profile.neutral_count + profile.negative_count, 1),
+        "recent_violation": profile.violation_count > 0,
+        "points_balance": points.balance,
+    }
+
+
+@app.get("/v1/full/{wallet_id}")
+async def get_full_profile(wallet_id: str, x_wallet_id: str = Header(None)):
+    """深层查询 - 消耗积分"""
+    # 消耗20积分
+    if not reputation.consume_points(x_wallet_id, 20):
+        raise HTTPException(status_code=402, detail="Insufficient points")
+    
+    profile = reputation.get_profile(wallet_id)
+    points = reputation.get_points(wallet_id)
+    
+    return {
+        "profile": profile.dict(),
+        "points": points.dict(),
+    }
+
+
+@app.post("/v1/event")
+async def handle_event(request: EventRequest, x_wallet_id: str = Header(None)):
+    """写入交易/评价 - 获得积分奖励"""
+    
+    if request.event_type == "transaction_completed":
+        # 处理交易
+        reputation.process_transaction(
+            request.tx_id or str(uuid.uuid4()),
+            request.buyer_wallet,
+            request.seller_wallet,
+            request.amount
+        )
+        
+        # 获取奖励
+        points = reputation.get_points(x_wallet_id)
+        
+        return {
+            "status": "accepted",
+            "points": {
+                "earned": Config.POINTS_CONFIG["event_reward"],
+                "balance": points.balance
+            }
+        }
+    
+    elif request.event_type == "rating":
+        # 处理评价
+        reputation.process_rating(x_wallet_id, request.seller_wallet, request.rating)
+        
+        points = reputation.get_points(x_wallet_id)
+        
+        return {
+            "status": "accepted",
+            "points": {
+                "earned": Config.POINTS_CONFIG["rating_reward"],
+                "balance": points.balance
+            }
+        }
+    
+    return {"status": "rejected", "reason": "unknown event_type"}
+
+
+@app.get("/v1/points/balance")
+async def get_points_balance(x_wallet_id: str = Header(None)):
+    """查询积分余额"""
+    points = reputation.get_points(x_wallet_id)
+    return {
+        "balance": points.balance,
+        "total_earned": points.total_earned,
+        "total_burned": points.total_burned,
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
+八、工具函数 utils.py
+python
+import hashlib
+import hmac
+
+def hash_data(data: str) -> str:
+    """计算数据哈希"""
+    return hashlib.sha256(data.encode()).hexdigest()
+
+def sign_data(data: str, secret: str) -> str:
+    """签名数据"""
+    return hmac.new(secret.encode(), data.encode(), hashlib.sha256).hexdigest()
+
+def verify_signature(data: str, signature: str, secret: str) -> bool:
+    """验证签名"""
+    expected = sign_data(data, secret)
+    return hmac.compare_digest(expected, signature)
+九、依赖文件 requirements.txt
+text
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+requests==2.31.0
+python-dotenv==1.0.0
+十、运行命令
+bash
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 启动服务
+python api.py
+
+# 3. 测试
+curl http://localhost:8080/v1/check/0x1234
+curl http://localhost:8080/v1/profile/0x1234
+
+# 4. 写入交易
+curl -X POST http://localhost:8080/v1/event \
+  -H "Content-Type: application/json" \
+  -H "X-Wallet-ID: 0x1234" \
+  -d '{
+    "event_type": "transaction_completed",
+    "buyer_wallet": "0x1234",
+    "seller_wallet": "0x5678",
+    "tx_id": "tx_001",
+    "amount": 100
+  }'

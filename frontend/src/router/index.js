@@ -21,6 +21,12 @@ const routes = [
     name: 'ProductDetail',
     component: () => import('@/views/ProductDetail.vue')
   },
+  // TEMPORARILY DISABLED - Encoding issues
+  // {
+  //   path: '/upload',
+  //   name: 'Upload',
+  //   component: () => import('@/views/Upload.vue')
+  // },
   {
     path: '/chat',
     name: 'Chat',
@@ -60,26 +66,33 @@ const routes = [
     name: 'Profile',
     component: () => import('@/views/Profile.vue')
   },
-  {
-    path: '/post-requirement',
-    name: 'PostRequirement',
-    component: () => import('@/views/PostRequirement.vue')
-  },
-  {
-    path: '/post-requirement/new',
-    name: 'PostRequirementNew',
-    component: () => import('@/views/PostRequirementNew.vue')
-  },
-  {
-    path: '/demand/:id',
-    name: 'DemandDetail',
-    component: () => import('@/views/DemandDetail.vue')
-  },
-  {
-    path: '/ai-task/:id',
-    name: 'AITaskDetail',
-    component: () => import('@/views/AITaskDetail.vue')
-  },
+  // TEMPORARILY DISABLED - Encoding issues
+  // {
+  //   path: '/ai-agent-hub',
+  //   name: 'AIAgentHub',
+  //   component: () => import('@/views/AIAgentHub.vue')
+  // },
+  // TEMPORARILY DISABLED - Encoding issues
+  // {
+  //   path: '/post-requirement',
+  //   name: 'PostRequirement',
+  //   component: () => import('@/views/PostRequirement.vue')
+  // },
+  // {
+  //   path: '/post-requirement/new',
+  //   name: 'PostRequirementNew',
+  //   component: () => import('@/views/PostRequirementNew.vue')
+  // },
+  // {
+  //   path: '/demand/:id',
+  //   name: 'DemandDetail',
+  //   component: () => import('@/views/DemandDetail.vue')
+  // },
+  // {
+  //   path: '/ai-task/:id',
+  //   name: 'AITaskDetail',
+  //   component: () => import('@/views/AITaskDetail.vue')
+  // },
   {
     path: '/ai-config',
     name: 'AIConfig',
@@ -89,6 +102,11 @@ const routes = [
     path: '/ai-register',
     name: 'AIRegister',
     component: () => import('@/views/AIRegister.vue')
+  },
+  {
+    path: '/ai-wallet',
+    name: 'AIWallet',
+    component: () => import('@/views/AIWallet.vue')
   },
   {
     path: '/wallet',
@@ -106,6 +124,11 @@ const routes = [
     component: () => import('@/views/Orders.vue')
   },
   {
+    path: '/orders/:id',
+    name: 'OrderDetail',
+    component: () => import('@/views/OrderDetail.vue')
+  },
+  {
     path: '/create',
     name: 'CreateContent',
     component: () => import('@/views/CreateContent.vue')
@@ -116,24 +139,30 @@ const routes = [
     component: () => import('@/views/CreatorCenter.vue')
   },
   {
-    path: '/notification-settings',
-    name: 'NotificationSettings',
-    component: () => import('@/views/NotificationSettings.vue')
-  },
-  {
     path: '/admin/customer-service',
     name: 'CustomerServiceAdmin',
     component: () => import('@/views/CustomerServiceAdmin.vue')
   },
+  // TEMPORARILY DISABLED - Encoding issues
+  // {
+  //   path: '/test-user',
+  //   name: 'TestUser',
+  //   component: () => import('@/views/TestUser.vue')
+  // },
+  // {
+  //   path: '/test-admin',
+  //   name: 'TestAdmin',
+  //   component: () => import('@/views/TestAdmin.vue')
+  // },
   {
-    path: '/test-user',
-    name: 'TestUser',
-    component: () => import('@/views/TestUser.vue')
+    path: '/ai-test',
+    name: 'AITest',
+    component: () => import('@/views/AITest.vue')
   },
   {
-    path: '/test-admin',
-    name: 'TestAdmin',
-    component: () => import('@/views/TestAdmin.vue')
+    path: '/admin/deposits',
+    name: 'AdminDeposits',
+    component: () => import('@/views/AdminDeposits.vue')
   }
 ]
 

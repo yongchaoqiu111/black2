@@ -5,10 +5,10 @@
     <section class="pt-32 pb-20 px-4 md:px-6">
       <div class="max-w-7xl mx-auto text-center">
         <h1 class="text-4xl md:text-6xl lg:text-7xl font-bold text-gray-900 mb-6 leading-tight">
-          {{ $t('home.title') }}
+          TEXT
         </h1>
         <p class="text-lg md:text-xl text-gray-600 mb-6 max-w-3xl mx-auto px-4">
-          {{ $t('home.subtitle') }}
+          TEXT
         </p>
         
         <!-- Platform Philosophy -->
@@ -44,7 +44,7 @@
             to="/shop"
             class="inline-flex items-center px-6 md:px-8 py-3 md:py-4 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors text-sm md:text-base"
           >
-            {{ $t('home.viewMore') }}
+            TEXT
             <i class="fa-solid fa-arrow-right ml-2"></i>
           </router-link>
           <router-link 
@@ -61,7 +61,7 @@
     <!-- Featured Categories -->
     <section class="py-12 md:py-16 border-t border-gray-200">
       <div class="max-w-7xl mx-auto px-4 md:px-6">
-        <h2 class="text-2xl md:text-3xl font-bold text-gray-900 mb-6 md:mb-8">{{ $t('home.browseByCategory') }}</h2>
+        <h2 class="text-2xl md:text-3xl font-bold text-gray-900 mb-6 md:mb-8">TEXT</h2>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
           <router-link 
             v-for="cat in categories" 
@@ -73,7 +73,7 @@
               <i class="fa-solid fa-box text-gray-600 group-hover:text-white text-lg md:text-xl"></i>
             </div>
             <h3 class="font-semibold text-gray-900 mb-1 text-sm md:text-base">{{ cat.name }}</h3>
-            <p class="text-xs md:text-sm text-gray-600">{{ cat.count }} {{ $t('product.filter.items') }}</p>
+            <p class="text-xs md:text-sm text-gray-600">{{ cat.count }} TEXT</p>
           </router-link>
         </div>
       </div>

@@ -113,7 +113,7 @@
             <!-- Price Section -->
             <div class="mb-6 p-4 bg-red-50 rounded-lg">
               <div class="flex items-baseline space-x-3">
-                <span class="text-sm text-gray-600">{{ $t('product.detail.price') }}:</span>
+                <span class="text-sm text-gray-600">价格:</span>
                 <span class="text-3xl font-bold text-red-600">{{ product.price }} USDT</span>
                 <span v-if="product.originalPrice" class="text-lg text-gray-400 line-through">{{ product.originalPrice }} USDT</span>
               </div>
@@ -164,7 +164,7 @@
                 @click="handleBuyNow"
                 class="w-full py-4 bg-red-600 text-white rounded-lg font-bold text-lg hover:bg-red-700 transition-colors shadow-md"
               >
-                {{ $t('product.detail.buyNow') }}
+                立即购买
               </button>
               
               <div class="grid grid-cols-2 gap-3">
@@ -172,7 +172,7 @@
                   @click="handleAddToCart"
                   class="py-3 bg-orange-500 text-white rounded-lg font-medium hover:bg-orange-600 transition-colors"
                 >
-                  {{ $t('product.detail.addToCart') }}
+                  加入购物车
                 </button>
                 <button 
                   @click="handleFavorite"
@@ -187,7 +187,7 @@
                     <svg class="w-5 h-5" :fill="isFavorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                     </svg>
-                    <span>{{ isFavorited ? $t('product.detail.favorited') : $t('product.detail.favorite') }}</span>
+                    <span>{{ isFavorited ? '已收藏' : '收藏' }}</span>
                   </span>
                 </button>
               </div>
@@ -197,13 +197,13 @@
                 class="w-full py-3 border-2 border-blue-500 text-blue-500 rounded-lg font-medium hover:bg-blue-50 transition-colors flex items-center justify-center space-x-2"
               >
                 <i class="fa-solid fa-comments"></i>
-                <span>{{ $t('product.detail.contactSeller') }}</span>
+                <span>联系卖家</span>
               </router-link>
             </div>
 
             <!-- Tags -->
             <div>
-              <h3 class="text-sm font-semibold text-gray-900 mb-2">{{ $t('product.detail.tags') }}:</h3>
+              <h3 class="text-sm font-semibold text-gray-900 mb-2">TEXT:</h3>
               <div class="flex flex-wrap gap-2">
                 <span 
                   v-for="tag in product.tags" 
@@ -260,7 +260,7 @@
 
           <!-- Transaction Process -->
           <div v-if="activeTab === 'process'" class="space-y-6">
-            <h3 class="text-xl font-bold text-gray-900 mb-6">{{ $t('product.detail.transactionProcess') }}</h3>
+            <h3 class="text-xl font-bold text-gray-900 mb-6">交易流程</h3>
             <div class="space-y-4">
               <div v-for="(step, index) in transactionSteps" :key="index" class="flex items-start space-x-4">
                 <div class="flex-shrink-0 w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center font-bold">
@@ -276,7 +276,7 @@
 
           <!-- Anti-Fraud Tips -->
           <div v-if="activeTab === 'safety'" class="space-y-4">
-            <h3 class="text-xl font-bold text-gray-900 mb-6">{{ $t('product.detail.antiFraudTips') }}</h3>
+            <h3 class="text-xl font-bold text-gray-900 mb-6">防骗提示</h3>
             <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6">
               <div class="flex">
                 <svg class="w-6 h-6 text-yellow-600 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -307,7 +307,7 @@
       <div class="absolute inset-0 bg-black/50" @click="showContactModal = false"></div>
       <div class="relative bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
         <div class="flex items-center justify-between mb-4">
-          <h3 class="text-xl font-bold text-gray-900">{{ $t('product.detail.contactSeller') }}</h3>
+          <h3 class="text-xl font-bold text-gray-900">联系卖家</h3>
           <button @click="showContactModal = false" class="text-gray-500 hover:text-gray-700">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -340,12 +340,18 @@
 
 <script setup>
 import { ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useCartStore } from '@/stores/cart'
+import { useOrderStore } from '@/stores/orders'
+import { ordersApi } from '@/services/api'
+import { useUserStore } from '@/stores/user'
 // Navbar is now in Layout component
 
 const route = useRoute()
+const router = useRouter()
 const cartStore = useCartStore()
+const orderStore = useOrderStore()
+const userStore = useUserStore()
 const showVideo = ref(false)
 const currentImageIndex = ref(0)
 const isFollowing = ref(false)
@@ -386,6 +392,8 @@ const product = ref({
   price: 299,
   originalPrice: 499,
   seller: 'Marketing Pro Studio',
+  sellerAddress: 'TN8qJz7K3V9pL2xR5wM4nB6cY1dF3gH8jK', // Mock seller address
+  fileHash: null,
   video: 'https://www.w3schools.com/html/mov_bbb.mp4',
   images: [
     'https://via.placeholder.com/1200x800?text=Product+Image+1',
@@ -431,7 +439,43 @@ const prevImage = () => {
 
 const handleFollow = () => { isFollowing.value = !isFollowing.value }
 const handleFavorite = () => { isFavorited.value = !isFavorited.value }
-const handleBuyNow = () => { alert('Proceeding to checkout...') }
+const handleBuyNow = async () => {
+  // 检查是否登录
+  if (!userStore.user?.address) {
+    alert('请先登录')
+    router.push('/login')
+    return
+  }
+
+  try {
+    // 生成一个随机的 contract_hash（模拟合同约定）
+    const contractHash = Array.from({length: 64}, () => Math.floor(Math.random() * 16).toString(16)).join('')
+    
+    // Create order - use AI wallet address for payment
+    const orderData = {
+      from_address: userStore.aiWalletAddress || userStore.user?.ai_wallet_address,
+      to_address: product.value.sellerAddress || 'UNKNOWN',
+      amount: product.value.price,
+      currency: 'USDT',
+      contract_hash: contractHash,
+      file_hash: null
+    }
+    
+    console.log('Creating order:', orderData)
+    const response = await ordersApi.create(orderData)
+    console.log('Order created:', response.data)
+    
+    alert('订单创建成功！订单号：' + response.data.tx_id)
+    
+    // 刷新订单列表
+    await orderStore.loadOrders()
+    
+    router.push('/orders')
+  } catch (error) {
+    console.error('Failed to create order:', error)
+    alert('创建订单失败：' + (error.response?.data?.detail || error.message))
+  }
+}
 const handleAddToCart = () => {
   cartStore.addItem(product)
   alert('Added to cart successfully!')

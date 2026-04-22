@@ -101,11 +101,23 @@ async def init_db():
             )
         ''')
         
+        # Create sub_wallets table (user sub-wallet addresses managed by platform)
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS sub_wallets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_address TEXT UNIQUE NOT NULL,
+                wallet_address TEXT UNIQUE NOT NULL,
+                private_key TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         # Create deposits table (on-chain deposit records)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS deposits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_address TEXT NOT NULL,
+                wallet_address TEXT,
                 tx_hash TEXT UNIQUE NOT NULL,
                 amount REAL NOT NULL,
                 status TEXT DEFAULT 'pending',
@@ -158,6 +170,7 @@ async def init_db():
                 contract_template TEXT,
                 metrics TEXT,  -- JSON array of quantifiable metrics
                 file_hash TEXT,
+                delivery_url TEXT,
                 delivery_method TEXT,
                 auto_confirm_hours INTEGER DEFAULT 72,
                 storage_plan TEXT,
@@ -194,8 +207,14 @@ async def init_db():
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                address TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                address TEXT UNIQUE,
+                name TEXT,
                 reputation_score INTEGER DEFAULT 100,
+                is_verified INTEGER DEFAULT 0,
+                verification_code TEXT,
+                verification_code_expires DATETIME,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -213,6 +232,55 @@ async def init_db():
                 FOREIGN KEY (user_address) REFERENCES users(address)
             )
         ''')
+        
+        # Database migration: add missing columns to existing tables
+        # Check and add delivery_url column to products table
+        try:
+            cursor = await db.execute("PRAGMA table_info(products)")
+            columns = await cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            if 'delivery_url' not in column_names:
+                await db.execute("ALTER TABLE products ADD COLUMN delivery_url TEXT DEFAULT ''")
+                print("[Migration] Added delivery_url column to products table")
+        except Exception as e:
+            print(f"[Migration] Warning: Could not check/add delivery_url: {e}")
+        
+        # Check and add delivery_checklist column to products table
+        try:
+            cursor = await db.execute("PRAGMA table_info(products)")
+            columns = await cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            if 'delivery_checklist' not in column_names:
+                await db.execute("ALTER TABLE products ADD COLUMN delivery_checklist TEXT DEFAULT '{}'")
+                print("[Migration] Added delivery_checklist column to products table")
+        except Exception as e:
+            print(f"[Migration] Warning: Could not check/add delivery_checklist: {e}")
+        
+        # Check and add wallet_address column to deposits table
+        try:
+            cursor = await db.execute("PRAGMA table_info(deposits)")
+            columns = await cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            if 'wallet_address' not in column_names:
+                await db.execute("ALTER TABLE deposits ADD COLUMN wallet_address TEXT DEFAULT ''")
+                print("[Migration] Added wallet_address column to deposits table")
+        except Exception as e:
+            print(f"[Migration] Warning: Could not check/add wallet_address: {e}")
+        
+        # Check and add notes column to deposits table
+        try:
+            cursor = await db.execute("PRAGMA table_info(deposits)")
+            columns = await cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            if 'notes' not in column_names:
+                await db.execute("ALTER TABLE deposits ADD COLUMN notes TEXT DEFAULT ''")
+                print("[Migration] Added notes column to deposits table")
+        except Exception as e:
+            print(f"[Migration] Warning: Could not check/add notes to deposits: {e}")
         
         await db.commit()
 
@@ -346,7 +414,7 @@ async def create_transaction(transaction: dict) -> Dict[str, Any]:
 
 async def get_transaction(tx_id: str) -> Optional[Dict[str, Any]]:
     """
-    Get a transaction by tx_id.
+    Get a transaction by tx_id (with referral info).
     
     Args:
         tx_id: Transaction ID
@@ -356,7 +424,14 @@ async def get_transaction(tx_id: str) -> Optional[Dict[str, Any]]:
     """
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('''
-            SELECT * FROM transactions WHERE tx_id = ?
+            SELECT t.*, 
+                   r.tu1_address, r.tu1_amount, 
+                   r.tu2_address, r.tu2_amount, 
+                   r.tu3_address, r.tu3_amount, 
+                   r.settlement_status
+            FROM transactions t
+            LEFT JOIN transaction_referrals r ON t.tx_id = r.tx_id
+            WHERE t.tx_id = ?
         ''', (tx_id,)) as cursor:
             row = await cursor.fetchone()
             if not row:
@@ -386,26 +461,35 @@ async def list_transactions(
         offset: Offset for pagination
         
     Returns:
-        List of transaction dictionaries
+        List of transaction dictionaries (with referral info)
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        # Build query
-        query = 'SELECT * FROM transactions WHERE 1=1'
+        # Build query with LEFT JOIN to transaction_referrals
+        query = '''
+            SELECT t.*, 
+                   r.tu1_address, r.tu1_amount, 
+                   r.tu2_address, r.tu2_amount, 
+                   r.tu3_address, r.tu3_amount, 
+                   r.settlement_status
+            FROM transactions t
+            LEFT JOIN transaction_referrals r ON t.tx_id = r.tx_id
+            WHERE 1=1
+        '''
         params = []
         
         if status:
-            query += ' AND status = ?'
+            query += ' AND t.status = ?'
             params.append(status)
         
         if from_address:
-            query += ' AND from_address = ?'
+            query += ' AND t.from_address = ?'
             params.append(from_address)
         
         if to_address:
-            query += ' AND to_address = ?'
+            query += ' AND t.to_address = ?'
             params.append(to_address)
         
-        query += ' ORDER BY timestamp DESC LIMIT ? OFFSET ?'
+        query += ' ORDER BY t.timestamp DESC LIMIT ? OFFSET ?'
         params.extend([limit, offset])
         
         async with db.execute(query, params) as cursor:
@@ -600,19 +684,19 @@ async def cancel_referral_rewards(tx_id: str):
 
 async def calculate_referral_chain(buyer_address: str) -> List[str]:
     """
-    Calculate 5-level referral chain for a buyer.
+    Calculate 3-level referral chain for a buyer.
     
     Args:
         buyer_address: Buyer's address
         
     Returns:
-        List of referrer addresses in order (level 1 to 5)
+        List of referrer addresses in order (level 1 to 3)
     """
     chain = []
     current_address = buyer_address
     
     async with aiosqlite.connect(DB_PATH) as db:
-        for level in range(5):
+        for level in range(3):  # Changed from 5 to 3
             # Query who referred the current user
             cursor = await db.execute('''
                 SELECT referrer_address FROM referral_relationships
@@ -716,15 +800,15 @@ async def update_human_wallet_balance(address: str, points_change: float, lock_p
         await db.commit()
 
 
-async def record_deposit(user_address: str, tx_hash: str, amount: float):
+async def record_deposit(user_address: str, wallet_address: str, tx_hash: str, amount: float):
     """
     Record a deposit transaction.
     """
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute('''
-            INSERT INTO deposits (user_address, tx_hash, amount, status)
-            VALUES (?, ?, ?, 'pending')
-        ''', (user_address, tx_hash, amount))
+            INSERT INTO deposits (user_address, wallet_address, tx_hash, amount, status)
+            VALUES (?, ?, ?, ?, 'pending')
+        ''', (user_address, wallet_address, tx_hash, amount))
         deposit_id = cursor.lastrowid
         await db.commit()
         return deposit_id
@@ -839,9 +923,9 @@ async def create_product(product_data: Dict[str, Any]) -> str:
             INSERT INTO products (
                 product_id, seller_address, name, description, price, currency,
                 category, version, system_requirements, contract_template,
-                metrics, file_hash, delivery_method, auto_confirm_hours,
+                metrics, file_hash, delivery_url, delivery_method, auto_confirm_hours,
                 storage_plan, delivery_checklist, reputation_score, margin_percentage
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             product_id,
             product_data['seller_address'],
@@ -855,6 +939,7 @@ async def create_product(product_data: Dict[str, Any]) -> str:
             product_data.get('contract_template', ''),
             metrics_json,
             product_data.get('file_hash', ''),
+            product_data.get('delivery_url', ''),
             product_data.get('delivery_method', ''),
             product_data.get('auto_confirm_hours', 72),
             product_data.get('storage_plan', ''),

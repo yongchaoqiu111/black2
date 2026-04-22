@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="min-h-screen bg-gray-50">
     <!-- Header -->
     <div class="bg-white shadow-sm">
@@ -10,23 +10,7 @@
 
     <!-- Product Grid -->
     <div class="max-w-7xl mx-auto px-4 py-8">
-      <!-- Loading State -->
-      <div v-if="loading" class="text-center py-16">
-        <i class="fa-solid fa-spinner fa-spin text-6xl text-purple-600 mb-4"></i>
-        <p class="text-gray-500 text-lg">Loading products...</p>
-      </div>
-      
-      <!-- Error State -->
-      <div v-else-if="error" class="text-center py-16">
-        <i class="fa-solid fa-exclamation-triangle text-6xl text-red-500 mb-4"></i>
-        <p class="text-red-500 text-lg">Failed to load products</p>
-        <button @click="fetchProducts" class="mt-4 px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
-          Retry
-        </button>
-      </div>
-      
-      <!-- Products Grid -->
-      <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <div 
           v-for="product in products" 
           :key="product.id"
@@ -73,39 +57,31 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { productsApi } from '@/services/api'
 
 const router = useRouter()
 
-// Products data from API
 const products = ref([])
 const loading = ref(true)
-const error = ref(null)
 
-// Fetch products from API
-const fetchProducts = async () => {
+// Load products from backend
+onMounted(async () => {
   try {
-    loading.value = true
-    const response = await productsApi.getAll({ limit: 50 })
-    products.value = response.data.products || []
-  } catch (err) {
-    console.error('Failed to fetch products:', err)
-    error.value = err.message
-    // Fallback to empty array
-    products.value = []
+    const response = await fetch('/api/v1/products')
+    const data = await response.json()
+    
+    if (response.ok && data.products) {
+      products.value = data.products
+    }
+  } catch (error) {
+    console.error('Failed to load products:', error)
   } finally {
     loading.value = false
   }
-}
+})
 
 const goToProduct = (id) => {
   router.push(`/product/${id}`)
 }
-
-// Load products on mount
-onMounted(() => {
-  fetchProducts()
-})
 </script>
 
 <style scoped>

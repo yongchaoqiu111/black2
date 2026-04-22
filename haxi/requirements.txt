@@ -1,0 +1,5 @@
+# Black2 哈希计算工具依赖
+# Python 标准库已包含 hashlib 和 tkinter，无需额外安装
+
+# 打包工具（仅开发时需要）
+pyinstaller>=5.0

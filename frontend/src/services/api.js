@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api/v1'
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api/v1'
 
 // Create axios instance with default config
 const apiClient = axios.create({
@@ -94,45 +94,34 @@ export const productsApi = {
   }
 }
 
-// Contracts API
-export const contractsApi = {
-  create(contractData) {
-    return apiClient.post('/contracts', contractData)
-  },
-  
-  getById(contractId) {
-    return apiClient.get(`/contracts/${contractId}`)
-  },
-  
-  updateAnchor(contractId, anchorData) {
-    return apiClient.post(`/contracts/${contractId}/anchor`, anchorData)
-  },
-  
-  updateStatus(contractId, statusData) {
-    return apiClient.post(`/contracts/${contractId}/status`, statusData)
-  }
-}
-
 // Orders API
 export const ordersApi = {
   getAll(params = {}) {
-    return apiClient.get('/orders', { params })
+    return apiClient.get('/transactions', { params })
   },
   
   getById(orderId) {
-    return apiClient.get(`/orders/${orderId}`)
+    return apiClient.get(`/transactions/${orderId}`)
   },
   
   create(orderData) {
-    return apiClient.post('/orders', orderData)
+    return apiClient.post('/transactions', orderData)
   },
   
   cancel(orderId) {
-    return apiClient.post(`/orders/${orderId}/cancel`)
+    return apiClient.post(`/transactions/${orderId}/cancel`)
   },
   
   complete(orderId) {
-    return apiClient.post(`/orders/${orderId}/complete`)
+    return apiClient.post(`/transactions/${orderId}/complete`)
+  },
+  
+  dispute(orderId, data) {
+    return apiClient.post(`/transactions/${orderId}/dispute`, data)
+  },
+  
+  refund(orderId) {
+    return apiClient.post(`/transactions/${orderId}/refund`)
   }
 }
 
@@ -148,46 +137,25 @@ export const walletApi = {
     return apiClient.get(`/wallets/ai/${address}`)
   },
   
+  // Generate AI wallet from master
+  generateAIWallet(aiIndex = 0) {
+    return apiClient.get('/wallets/ai/generate', { params: { ai_index: aiIndex } })
+  },
+  
+  getBalance() {
+    return apiClient.get('/wallet/balance')
+  },
+  
   deposit(depositData) {
-    return apiClient.post('/deposits', depositData)
+    return apiClient.post('/wallet/deposit', depositData)
   },
   
   withdraw(withdrawData) {
-    return apiClient.post('/withdrawals', withdrawData)
+    return apiClient.post('/wallet/withdraw', withdrawData)
   },
   
   getTransactions(params = {}) {
-    return apiClient.get('/transactions', { params })
-  }
-}
-
-// Transactions API (Black2 Protocol)
-export const transactionsApi = {
-  create(txData) {
-    return apiClient.post('/transactions', txData)
-  },
-  
-  getById(txId) {
-    return apiClient.get(`/transactions/${txId}`)
-  },
-  
-  updateStatus(txId, statusData) {
-    return apiClient.put(`/transactions/${txId}/status`, statusData)
-  },
-  
-  verifySignature(txId, verificationData) {
-    return apiClient.post(`/transactions/${txId}/verify`, verificationData)
-  },
-  
-  list(params = {}) {
-    return apiClient.get('/transactions', { params })
-  }
-}
-
-// Reputation API
-export const reputationApi = {
-  getReputation(address) {
-    return apiClient.get(`/reputation/${address}`)
+    return apiClient.get('/wallet/transactions', { params })
   }
 }
 

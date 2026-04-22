@@ -4,8 +4,8 @@
     <div class="max-w-4xl mx-auto px-4 md:px-6 py-8">
       <!-- Header -->
       <div class="mb-8 text-center">
-        <h1 class="text-2xl md:text-3xl font-bold text-gray-900 mb-2">{{ $t('payment.title') }}</h1>
-        <p class="text-sm md:text-base text-gray-600">{{ $t('payment.subtitle') }}</p>
+        <h1 class="text-2xl md:text-3xl font-bold text-gray-900 mb-2">TEXT</h1>
+        <p class="text-sm md:text-base text-gray-600">TEXT</p>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8">
@@ -13,26 +13,26 @@
         <div class="space-y-6">
           <!-- Order Summary -->
           <div class="bg-white rounded-lg shadow-sm p-6">
-            <h2 class="text-lg font-bold text-gray-900 mb-4">{{ $t('payment.orderSummary') }}</h2>
+            <h2 class="text-lg font-bold text-gray-900 mb-4">TEXT</h2>
             
             <div class="space-y-3 pb-4 border-b border-gray-200">
               <div class="flex justify-between">
-                <span class="text-gray-600">{{ $t('payment.product') }}</span>
+                <span class="text-gray-600">TEXT</span>
                 <span class="font-medium text-gray-900">{{ order.productName }}</span>
               </div>
               <div class="flex justify-between">
-                <span class="text-gray-600">{{ $t('payment.seller') }}</span>
+                <span class="text-gray-600">TEXT</span>
                 <span class="font-medium text-gray-900">{{ order.seller }}</span>
               </div>
               <div class="flex justify-between">
-                <span class="text-gray-600">{{ $t('payment.quantity') }}</span>
+                <span class="text-gray-600">TEXT</span>
                 <span class="font-medium text-gray-900">1</span>
               </div>
             </div>
 
             <div class="pt-4">
               <div class="flex justify-between items-center">
-                <span class="text-lg font-semibold text-gray-900">{{ $t('payment.totalAmount') }}</span>
+                <span class="text-lg font-semibold text-gray-900">TEXT</span>
                 <div class="text-right">
                   <span class="text-2xl font-bold text-blue-600">${{ order.amount }}</span>
                   <p class="text-sm text-gray-500">�?{{ order.usdtAmount }} USDT</p>
@@ -43,7 +43,7 @@
 
           <!-- Network Selection -->
           <div class="bg-white rounded-lg shadow-sm p-6">
-            <h2 class="text-lg font-bold text-gray-900 mb-4">{{ $t('payment.selectNetwork') }}</h2>
+            <h2 class="text-lg font-bold text-gray-900 mb-4">TEXT</h2>
             
             <div class="space-y-3">
               <!-- TRC20 Option -->
@@ -64,11 +64,11 @@
                 />
                 <div class="ml-3 flex-1">
                   <div class="flex items-center justify-between">
-                    <span class="font-semibold text-gray-900">{{ $t('payment.trc20') }}</span>
-                    <span class="px-2 py-1 bg-green-100 text-green-700 text-xs font-bold rounded">{{ $t('payment.recommended') }}</span>
+                    <span class="font-semibold text-gray-900">TEXT</span>
+                    <span class="px-2 py-1 bg-green-100 text-green-700 text-xs font-bold rounded">TEXT</span>
                   </div>
-                  <p class="text-sm text-gray-600 mt-1">{{ $t('payment.lowerFees') }}</p>
-                  <p class="text-xs text-gray-500 mt-1">{{ $t('payment.networkFee') }}: ~1 USDT</p>
+                  <p class="text-sm text-gray-600 mt-1">TEXT</p>
+                  <p class="text-xs text-gray-500 mt-1">TEXT: ~1 USDT</p>
                 </div>
               </label>
 
@@ -90,10 +90,10 @@
                 />
                 <div class="ml-3 flex-1">
                   <div class="flex items-center justify-between">
-                    <span class="font-semibold text-gray-900">{{ $t('payment.erc20') }}</span>
+                    <span class="font-semibold text-gray-900">TEXT</span>
                   </div>
-                  <p class="text-sm text-gray-600 mt-1">{{ $t('payment.widelySupported') }}</p>
-                  <p class="text-xs text-gray-500 mt-1">{{ $t('payment.networkFee') }}: ~5-15 USDT</p>
+                  <p class="text-sm text-gray-600 mt-1">TEXT</p>
+                  <p class="text-xs text-gray-500 mt-1">TEXT: ~5-15 USDT</p>
                 </div>
               </label>
             </div>
@@ -105,7 +105,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
                 <p class="text-sm text-yellow-700">
-                  <strong>{{ $t('payment.important') }}:</strong> {{ $t('payment.importantNotice') }}
+                  <strong>TEXT:</strong> TEXT
                 </p>
               </div>
             </div>
@@ -114,7 +114,7 @@
 
         <!-- Right Column - QR Code & Address -->
         <div class="bg-white rounded-lg shadow-sm p-6">
-          <h2 class="text-lg font-bold text-gray-900 mb-6 text-center">{{ $t('payment.paymentDetails') }}</h2>
+          <h2 class="text-lg font-bold text-gray-900 mb-6 text-center">TEXT</h2>
 
           <!-- QR Code -->
           <div class="flex justify-center mb-6">
@@ -151,7 +151,7 @@
 
           <!-- Wallet Address -->
           <div class="mb-6">
-            <label class="block text-sm font-medium text-gray-700 mb-2">{{ $t('payment.walletAddress') }}</label>
+            <label class="block text-sm font-medium text-gray-700 mb-2">TEXT</label>
             <div class="relative">
               <input 
                 type="text" 
@@ -173,25 +173,25 @@
               <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
               </svg>
-              {{ $t('payment.copied') }}
+              TEXT
             </p>
           </div>
 
           <!-- Amount to Pay -->
           <div class="mb-6 p-4 bg-blue-50 rounded-lg">
-            <label class="block text-sm font-medium text-gray-700 mb-2">{{ $t('payment.amountToPay') }}</label>
+            <label class="block text-sm font-medium text-gray-700 mb-2">TEXT</label>
             <div class="flex items-baseline space-x-2">
               <span class="text-3xl font-bold text-blue-600">{{ order.usdtAmount }}</span>
               <span class="text-lg font-semibold text-gray-700">USDT</span>
             </div>
-            <p class="text-xs text-gray-500 mt-1">{{ $t('payment.sendExactly') }}</p>
+            <p class="text-xs text-gray-500 mt-1">TEXT</p>
           </div>
 
           <!-- Payment Status -->
           <div class="border-t border-gray-200 pt-6">
             <div class="flex items-center justify-center space-x-2 mb-4">
               <div class="w-3 h-3 bg-yellow-500 rounded-full animate-pulse"></div>
-              <span class="text-sm font-medium text-gray-700">{{ $t('payment.waitingPayment') }}</span>
+              <span class="text-sm font-medium text-gray-700">TEXT</span>
             </div>
             
             <div class="text-center">
@@ -214,7 +214,7 @@
           <!-- Timer -->
           <div class="mt-4 text-center">
             <p class="text-sm text-gray-600">
-              {{ $t('payment.timeRemaining') }}: 
+              TEXT: 
               <span class="font-bold text-red-600">{{ formatTime(paymentTimeout) }}</span>
             </p>
           </div>
@@ -223,27 +223,27 @@
 
       <!-- Payment Instructions -->
       <div class="mt-8 bg-white rounded-lg shadow-sm p-6">
-        <h2 class="text-lg font-bold text-gray-900 mb-4">{{ $t('payment.howToPay') }}</h2>
+        <h2 class="text-lg font-bold text-gray-900 mb-4">TEXT</h2>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div class="flex items-start space-x-3">
             <div class="w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold flex-shrink-0">1</div>
             <div>
-              <h3 class="font-semibold text-gray-900 mb-1">{{ $t('payment.stepOpenWallet') }}</h3>
-              <p class="text-sm text-gray-600">{{ $t('payment.stepOpenWalletDesc') }}</p>
+              <h3 class="font-semibold text-gray-900 mb-1">TEXT</h3>
+              <p class="text-sm text-gray-600">TEXT</p>
             </div>
           </div>
           <div class="flex items-start space-x-3">
             <div class="w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold flex-shrink-0">2</div>
             <div>
-              <h3 class="font-semibold text-gray-900 mb-1">{{ $t('payment.stepScanCopy') }}</h3>
-              <p class="text-sm text-gray-600">{{ $t('payment.stepScanCopyDesc') }}</p>
+              <h3 class="font-semibold text-gray-900 mb-1">TEXT</h3>
+              <p class="text-sm text-gray-600">TEXT</p>
             </div>
           </div>
           <div class="flex items-start space-x-3">
             <div class="w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold flex-shrink-0">3</div>
             <div>
-              <h3 class="font-semibold text-gray-900 mb-1">{{ $t('payment.stepSendPayment') }}</h3>
-              <p class="text-sm text-gray-600">{{ $t('payment.stepSendPaymentDesc') }}</p>
+              <h3 class="font-semibold text-gray-900 mb-1">TEXT</h3>
+              <p class="text-sm text-gray-600">TEXT</p>
             </div>
           </div>
         </div>
@@ -259,13 +259,13 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
           </svg>
         </div>
-        <h3 class="text-2xl font-bold text-gray-900 mb-2">{{ $t('payment.paymentConfirmed') }}</h3>
-        <p class="text-gray-600 mb-6">{{ $t('payment.paymentSuccessMsg') }}</p>
+        <h3 class="text-2xl font-bold text-gray-900 mb-2">TEXT</h3>
+        <p class="text-gray-600 mb-6">TEXT</p>
         <button 
           @click="goToDownload"
           class="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
         >
-          {{ $t('payment.goToDownloads') }}
+          TEXT
         </button>
       </div>
     </div>

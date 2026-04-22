@@ -4,15 +4,15 @@
       
       <!-- Header -->
       <div class="mb-8">
-        <h1 class="text-3xl font-bold text-gray-900 mb-2">My Orders</h1>
-        <p class="text-gray-600">Track and manage your purchases</p>
+        <h1 class="text-3xl font-bold text-gray-900 mb-2">我的订单</h1>
+        <p class="text-gray-600">跟踪和管理您的购买记录</p>
       </div>
 
       <!-- Order Stats -->
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-sm text-gray-600">Total Orders</span>
+            <span class="text-sm text-gray-600">总订单数</span>
             <i class="fa-solid fa-shopping-bag text-purple-600 text-xl"></i>
           </div>
           <div class="text-2xl font-bold text-gray-900">{{ orderStore.orders.length }}</div>
@@ -20,7 +20,7 @@
         
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-sm text-gray-600">Pending</span>
+            <span class="text-sm text-gray-600">待处理</span>
             <i class="fa-solid fa-clock text-yellow-600 text-xl"></i>
           </div>
           <div class="text-2xl font-bold text-yellow-600">{{ orderStore.pendingOrders.length }}</div>
@@ -28,7 +28,7 @@
         
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-sm text-gray-600">Completed</span>
+            <span class="text-sm text-gray-600">已完成</span>
             <i class="fa-solid fa-check-circle text-green-600 text-xl"></i>
           </div>
           <div class="text-2xl font-bold text-green-600">{{ orderStore.completedOrders.length }}</div>
@@ -36,7 +36,7 @@
         
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-sm text-gray-600">Total Spent</span>
+            <span class="text-sm text-gray-600">总消费</span>
             <i class="fa-solid fa-dollar-sign text-blue-600 text-xl"></i>
           </div>
           <div class="text-2xl font-bold text-blue-600">${{ orderStore.totalSpent.toFixed(2) }}</div>
@@ -107,7 +107,7 @@
                 />
                 <div class="flex-1">
                   <div class="font-medium text-gray-900">{{ item.name }}</div>
-                  <div class="text-sm text-gray-600">Qty: {{ item.quantity }}</div>
+                  <div class="text-sm text-gray-600">数量：{{ item.quantity }}</div>
                 </div>
                 <div class="font-semibold text-gray-900">${{ (item.price * item.quantity).toFixed(2) }}</div>
               </div>
@@ -117,32 +117,32 @@
             <div class="flex items-center justify-between pt-4 border-t border-gray-200">
               <div class="text-sm text-gray-600">
                 <i class="fa-solid fa-credit-card mr-1"></i>
-                Payment: {{ getPaymentMethodText(order.paymentMethod) }}
+                支付方式：{{ getPaymentMethodText(order.paymentMethod) }}
               </div>
               
               <div class="flex space-x-2">
                 <router-link 
-                  :to="{ name: 'ProductDetail', params: { id: order.items[0]?.id } }"
+                  :to="{ name: 'OrderDetail', params: { id: order.id } }"
                   class="px-4 py-2 text-sm font-medium text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
                 >
-                  View Product
+                  查看详情
                 </router-link>
-                
+                                
                 <button 
                   v-if="order.status === 'pending'"
                   @click="handleCancelOrder(order.id)"
                   class="px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                 >
-                  Cancel Order
+                  取消订单
                 </button>
-                
+                                
                 <button 
                   v-if="order.status === 'completed'"
                   @click="handleDownload(order)"
                   class="px-4 py-2 text-sm font-medium text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                 >
                   <i class="fa-solid fa-download mr-1"></i>
-                  Download
+                  下载
                 </button>
               </div>
             </div>
@@ -154,14 +154,14 @@
           <div class="w-24 h-24 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
             <i class="fa-solid fa-receipt text-5xl text-gray-400"></i>
           </div>
-          <h3 class="text-lg font-semibold text-gray-900 mb-2">No orders found</h3>
-          <p class="text-gray-600 mb-6">You haven't placed any orders yet</p>
+          <h3 class="text-lg font-semibold text-gray-900 mb-2">暂无订单</h3>
+          <p class="text-gray-600 mb-6">您还没有下过任何订单</p>
           <router-link 
             to="/shop"
             class="inline-flex items-center px-6 py-3 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 transition-colors"
           >
             <i class="fa-solid fa-shopping-bag mr-2"></i>
-            Start Shopping
+            开始购物
           </router-link>
         </div>
       </div>
@@ -170,17 +170,22 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useOrderStore } from '@/stores/orders'
 
 const orderStore = useOrderStore()
 
+// Load orders on mount
+onMounted(async () => {
+  await orderStore.loadOrders()
+})
+
 const activeTab = ref('all')
 
 const tabs = computed(() => [
-  { label: 'All Orders', value: 'all', count: null },
-  { label: 'Pending', value: 'pending', count: orderStore.pendingOrders.length },
-  { label: 'Completed', value: 'completed', count: orderStore.completedOrders.length }
+  { label: '全部订单', value: 'all', count: null },
+  { label: '已支付', value: 'paid', count: orderStore.orders.filter(o => o.status === 'paid').length },
+  { label: '已完成', value: 'completed', count: orderStore.completedOrders.length }
 ])
 
 const filteredOrders = computed(() => {
@@ -193,18 +198,22 @@ const filteredOrders = computed(() => {
 // Methods
 const getStatusBadgeClass = (status) => {
   const classes = {
-    pending: 'px-3 py-1 text-sm font-medium bg-yellow-100 text-yellow-800 rounded-full',
+    paid: 'px-3 py-1 text-sm font-medium bg-blue-100 text-blue-800 rounded-full',
+    shipped: 'px-3 py-1 text-sm font-medium bg-purple-100 text-purple-800 rounded-full',
     completed: 'px-3 py-1 text-sm font-medium bg-green-100 text-green-800 rounded-full',
-    cancelled: 'px-3 py-1 text-sm font-medium bg-red-100 text-red-800 rounded-full'
+    refunded: 'px-3 py-1 text-sm font-medium bg-red-100 text-red-800 rounded-full',
+    cancelled: 'px-3 py-1 text-sm font-medium bg-gray-100 text-gray-800 rounded-full'
   }
-  return classes[status] || classes.pending
+  return classes[status] || classes.paid
 }
 
 const getStatusText = (status) => {
   const texts = {
-    pending: 'Pending Payment',
-    completed: 'Completed',
-    cancelled: 'Cancelled'
+    paid: '已支付',
+    shipped: '已发货',
+    completed: '已完成',
+    refunded: '已退款',
+    cancelled: '已取消'
   }
   return texts[status] || status
 }
@@ -220,17 +229,11 @@ const getPaymentMethodText = (method) => {
 
 const formatDate = (dateString) => {
   const date = new Date(dateString)
-  return date.toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
+  return date.toLocaleString('zh-CN')
 }
 
 const handleCancelOrder = (orderId) => {
-  if (confirm('Are you sure you want to cancel this order?')) {
+  if (confirm('确定要取消这个订单吗？')) {
     orderStore.cancelOrder(orderId)
   }
 }
