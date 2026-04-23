@@ -36,7 +36,11 @@ class RateLimiter:
             return True, 0
         else:
             # Not allowed
-            remaining = int(interval - elapsed)
+            remaining = max(0, int(interval - elapsed + 0.99)) # Round up and ensure non-negative
+            if remaining == 0:
+                # Edge case: time passed but integer conversion showed 0
+                self.requests[key] = now
+                return True, 0
             return False, remaining
     
     def cleanup(self, max_age: int = 3600):

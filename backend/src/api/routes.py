@@ -97,6 +97,14 @@ class TransactionResponse(BaseModel):
     anchored_at: Optional[str] = None
     referrer_address: Optional[str] = None
     referral_level: Optional[int] = 0
+    # Referral commission fields (from transaction_referrals table)
+    tu1_address: Optional[str] = None
+    tu1_amount: Optional[float] = 0
+    tu2_address: Optional[str] = None
+    tu2_amount: Optional[float] = 0
+    tu3_address: Optional[str] = None
+    tu3_amount: Optional[float] = 0
+    settlement_status: Optional[str] = None
 
 class TransactionVerify(BaseModel):
     public_key: str
@@ -136,30 +144,16 @@ async def create_new_transaction(transaction: TransactionCreate) -> TransactionR
     # Generate a unique transaction ID
     tx_id = str(uuid.uuid4())
     
-    # Deduct payment from buyer's AI wallet
+    # Deduct payment from buyer's AI wallet (Atomic Operation)
     async with aiosqlite.connect(DB_PATH) as db:
-        # Check buyer's AI wallet balance
-        cursor = await db.execute(
-            'SELECT balance FROM ai_wallets WHERE address = ?',
-            (transaction.from_address,)
-        )
-        buyer_wallet = await cursor.fetchone()
-        
-        if not buyer_wallet:
-            raise HTTPException(status_code=400, detail="Buyer AI wallet not found")
-        
-        if buyer_wallet[0] < transaction.amount:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Insufficient balance. Current: {buyer_wallet[0]}, Required: {transaction.amount}"
-            )
-        
-        # Deduct payment from AI wallet
-        await db.execute(
-            'UPDATE ai_wallets SET balance = balance - ? WHERE address = ?',
-            (transaction.amount, transaction.from_address)
+        result = await db.execute(
+            'UPDATE ai_wallets SET balance = balance - ? WHERE address = ? AND balance >= ?',
+            (transaction.amount, transaction.from_address, transaction.amount)
         )
         await db.commit()
+        
+        if result.rowcount == 0:
+            raise HTTPException(status_code=400, detail="Insufficient balance or wallet not found")
         print(f"[Payment] Deducted {transaction.amount} from AI wallet {transaction.from_address}")
     
     # Create transaction data with status 'paid'
@@ -213,23 +207,26 @@ async def create_new_transaction(transaction: TransactionCreate) -> TransactionR
                 tu2_amount = round(tu2_amount * ratio, 2)
                 tu3_amount = round(tu3_amount * ratio, 2)
             
-            # Push settlement data to Redis queue (async write)
+            # Async Pre-write: Use BatchWriter to reduce DB pressure
+            # This only records WHO gets HOW MUCH, does NOT credit wallets yet
             try:
-                from src.utils.redis_queue import settlement_queue
-                from src.utils.settlement_worker import process_settlement
+                from src.utils.batch_writer import referral_writer
                 
-                settlement_queue.enqueue(
-                    process_settlement,
-                    tx_id, 
-                    transaction.to_address, seller_amount,  # Seller address and amount
-                    tu1_addr or '', tu1_amount or 0,
-                    tu2_addr or '', tu2_amount or 0,
-                    tu3_addr or '', tu3_amount or 0
+                await referral_writer.add(
+                    '''INSERT INTO transaction_referrals 
+                       (tx_id, tu1_address, tu1_amount, tu2_address, tu2_amount, 
+                        tu3_address, tu3_amount, settlement_status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (tx_id, tu1_addr or '', tu1_amount or 0,
+                     tu2_addr or '', tu2_amount or 0,
+                     tu3_addr or '', tu3_amount or 0,
+                     'pending')
                 )
-                
-                print(f"[Order] {tx_id} - Settlement queued (seller: {seller_amount}, tu1: {tu1_amount}, tu2: {tu2_amount}, tu3: {tu3_amount})")
+                print(f"[Order] {tx_id} - Referral pre-write queued (seller: {seller_amount}, tu1: {tu1_amount}, tu2: {tu2_amount}, tu3: {tu3_amount})")
             except Exception as e:
-                print(f"[Order] Failed to queue settlement: {e}")
+                print(f"[Order] Failed to queue referral pre-write: {e}")
+        else:
+            print(f"[Order] Warning: Seller {transaction.to_address} not found in users table")
     
     # Start auto-confirm countdown (default 72 hours)
     try:
@@ -276,7 +273,7 @@ async def complete_transaction(tx_id: str) -> Dict[str, Any]:
     Only allowed for 'paid' and 'shipped' status orders.
     """
     # Rate limiting
-    allowed, remaining = rate_limiter.is_allowed(f"complete_{tx_id}", interval=5)
+    allowed, remaining = rate_limiter.is_allowed(f"complete_{tx_id}", interval=1)
     if not allowed:
         raise HTTPException(
             status_code=429,
@@ -306,32 +303,31 @@ async def complete_transaction(tx_id: str) -> Dict[str, Any]:
     # Update transaction status
     await update_transaction_status(tx_id, 'completed')
     
-    # Get referral info from order
+    # Log this status change asynchronously
+    try:
+        from src.utils.batch_writer import log_writer
+        await log_writer.add(
+            'INSERT INTO reputation_history (user_address, score_change, new_score, reason) VALUES (?, ?, ?, ?)',
+            ('SYSTEM', 0, 0, f'Transaction {tx_id} completed at {datetime.now().isoformat()}')
+        )
+    except Exception as e:
+        print(f"[Log] Failed to queue status log: {e}")
+    
+    # Get referral info and execute settlement
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            'SELECT tu1_address, tu1_amount, tu2_address, tu2_amount, tu3_address, tu3_amount FROM transactions WHERE tx_id = ?',
+            'SELECT tu1_address, tu1_amount, tu2_address, tu2_amount, tu3_address, tu3_amount FROM transaction_referrals WHERE tx_id = ?',
             (tx_id,)
         )
         order = await cursor.fetchone()
         
         if order:
-            tu1_addr, tu1_amount, tu2_addr, tu2_amount, tu3_addr, tu3_amount = order
-            
-            # Push settlement task to Redis queue
-            try:
-                from src.utils.redis_queue import settlement_queue
-                from src.utils.settlement_worker import process_settlement
-                
-                settlement_queue.enqueue(
-                    process_settlement,
-                    tx_id, tu1_addr or '', tu1_amount or 0,
-                    tu2_addr or '', tu2_amount or 0,
-                    tu3_addr or '', tu3_amount or 0
-                )
-                
-                print(f"[Complete] Settlement task queued for order {tx_id}")
-            except Exception as e:
-                print(f"[Complete] Failed to queue settlement: {e}")
+            # Call the settlement function from transaction_db
+            from src.db.transaction_db import settle_referral_rewards
+            await settle_referral_rewards(tx_id)
+            print(f"[Complete] Settlement completed for order {tx_id}")
+        else:
+            print(f"[Complete] Warning: No referral record found in transaction_referrals for {tx_id}")
     
     # Cancel auto-confirm countdown if exists
     try:
@@ -351,6 +347,9 @@ async def dispute_transaction(tx_id: str, dispute_data: Dict[str, Any] = None) -
     """
     Initiate a dispute for a transaction.
     
+    This freezes the transaction and starts a 48-hour evidence collection period.
+    After 48 hours, the system will automatically arbitrate based on hash comparison.
+    
     Rate limit: 1 request per 60 seconds
     
     Only allowed for 'paid' and 'shipped' status orders.
@@ -363,10 +362,18 @@ async def dispute_transaction(tx_id: str, dispute_data: Dict[str, Any] = None) -
             detail=f"Rate limit exceeded. Wait {remaining}s"
         )
     
-    # Check transaction status
+    if dispute_data is None:
+        dispute_data = {}
+    
+    reason = dispute_data.get('reason', '')
+    
+    if not reason:
+        raise HTTPException(status_code=400, detail="Dispute reason is required")
+    
+    # Check transaction status and get details
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            'SELECT status, from_address, to_address, amount FROM transactions WHERE tx_id = ?',
+            'SELECT status, from_address, to_address, amount, contract_hash, file_hash FROM transactions WHERE tx_id = ?',
             (tx_id,)
         )
         row = await cursor.fetchone()
@@ -374,17 +381,42 @@ async def dispute_transaction(tx_id: str, dispute_data: Dict[str, Any] = None) -
         if not row:
             raise HTTPException(status_code=404, detail="Transaction not found")
         
-        current_status, buyer_addr, seller_addr, amount = row
+        current_status, buyer_addr, seller_addr, amount, contract_hash, file_hash = row
         
         # Only allow dispute for 'paid' or 'shipped' status
-        if current_status not in ['paid', 'shipped']:
+        if current_status not in ['paid', 'shipped', 'delivered', 'pending']:
             raise HTTPException(
                 status_code=400,
-                detail=f"Cannot dispute transaction with status '{current_status}'. Only 'paid' or 'shipped' orders can be disputed."
+                detail=f"Cannot dispute transaction with status '{current_status}'."
             )
+        
+        # Update transaction status to 'disputed'
+        await db.execute(
+            'UPDATE transactions SET status = ? WHERE tx_id = ?',
+            ('disputed', tx_id)
+        )
+        
+        # Create arbitration record
+        from datetime import datetime, timedelta
+        deadline = datetime.now() + timedelta(hours=48)
+        
+        await db.execute('''
+            INSERT INTO arbitration_records 
+            (tx_id, buyer_address, seller_address, buyer_reason, status, deadline)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (tx_id, buyer_addr, seller_addr, reason, 'evidence_collection', deadline.isoformat()))
+        
+        await db.commit()
     
-    # Update transaction status to 'disputed'
-    await update_transaction_status(tx_id, 'disputed')
+    # Log dispute event asynchronously
+    try:
+        from src.utils.batch_writer import log_writer
+        await log_writer.add(
+            'INSERT INTO reputation_history (user_address, score_change, new_score, reason) VALUES (?, ?, ?, ?)',
+            ('SYSTEM', 0, 0, f'Transaction {tx_id} disputed at {datetime.now().isoformat()}')
+        )
+    except Exception as e:
+        print(f"[Log] Failed to queue dispute log: {e}")
     
     # Cancel auto-confirm countdown if exists
     try:
@@ -394,25 +426,102 @@ async def dispute_transaction(tx_id: str, dispute_data: Dict[str, Any] = None) -
     except Exception as e:
         print(f"[Dispute] Failed to cancel countdown: {e}")
     
-    # TODO: Notify seller and start arbitration process
-    # For now, just return success
+    # Start arbitration countdown
+    try:
+        from src.anchor.arbitration_timer import arbitration_timer_service
+        await arbitration_timer_service.start_arbitration_countdown(tx_id, hours=48)
+        print(f"[Arbitration] Started 48h countdown for order {tx_id}")
+    except Exception as e:
+        print(f"[Arbitration] Failed to start countdown: {e}")
     
     return {
-        "message": "Dispute initiated. Transaction frozen pending arbitration.",
+        "message": "Dispute initiated. Transaction frozen. Seller has 48 hours to submit evidence.",
         "tx_id": tx_id,
-        "status": "disputed"
+        "status": "disputed",
+        "deadline": deadline.isoformat(),
+        "buyer_reason": reason
     }
 
 
-@router.post("/api/v1/transactions/{tx_id}/refund")
-async def refund_transaction(tx_id: str) -> Dict[str, Any]:
+@router.post("/api/v1/arbitration/{tx_id}/seller-evidence")
+async def submit_seller_evidence(tx_id: str, evidence_data: Dict[str, Any] = None) -> Dict[str, Any]:
     """
-    Refund a transaction (after arbitration).
-    Returns money to buyer and cancels referral rewards.
+    Seller submits evidence for arbitration.
+    
+    Args:
+        tx_id: Transaction ID being disputed
+        evidence_data: Evidence information (description, proof files, etc.)
+    """
+    if evidence_data is None:
+        evidence_data = {}
+    
+    evidence = evidence_data.get('evidence', '')
+    
+    if not evidence:
+        raise HTTPException(status_code=400, detail="Evidence is required")
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Check if arbitration record exists
+        cursor = await db.execute(
+            'SELECT status, seller_address FROM arbitration_records WHERE tx_id = ?',
+            (tx_id,)
+        )
+        record = await cursor.fetchone()
+        
+        if not record:
+            raise HTTPException(status_code=404, detail="Arbitration record not found")
+        
+        status, seller_addr = record
+        
+        if status != 'evidence_collection':
+            raise HTTPException(status_code=400, detail=f"Cannot submit evidence in status '{status}'")
+        
+        # Update seller evidence
+        await db.execute(
+            'UPDATE arbitration_records SET seller_evidence = ?, status = ? WHERE tx_id = ?',
+            (evidence, 'arbitrating', tx_id)
+        )
+        await db.commit()
+    
+    print(f"[Arbitration] Seller submitted evidence for order {tx_id}")
+    
+    return {
+        "message": "Evidence submitted successfully",
+        "tx_id": tx_id,
+        "status": "arbitrating"
+    }
+
+
+@router.get("/api/v1/arbitration/{tx_id}/status")
+async def get_arbitration_status(tx_id: str) -> Dict[str, Any]:
+    """
+    Get arbitration status for a transaction.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT * FROM arbitration_records WHERE tx_id = ?',
+            (tx_id,)
+        )
+        record = await cursor.fetchone()
+        
+        if not record:
+            raise HTTPException(status_code=404, detail="Arbitration record not found")
+        
+        columns = [desc[0] for desc in cursor.description]
+        arbitration = dict(zip(columns, record))
+        
+        return arbitration
+
+
+@router.post("/api/v1/transactions/{tx_id}/refund")
+async def request_refund(tx_id: str, refund_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    """
+    Buyer requests a refund. Seller has 48 hours to approve or reject.
+    If seller rejects or doesn't respond, arbitration is triggered.
     
     Rate limit: 1 request per 60 seconds
     
-    Only allowed for 'disputed' status orders.
+    Only allowed for 'paid', 'shipped', or 'delivered' status orders.
     """
     # Rate limiting
     allowed, remaining = rate_limiter.is_allowed(f"refund_{tx_id}", interval=5)
@@ -422,7 +531,12 @@ async def refund_transaction(tx_id: str) -> Dict[str, Any]:
             detail=f"Rate limit exceeded. Wait {remaining}s"
         )
     
-    # Check transaction status
+    if refund_data is None:
+        refund_data = {}
+    
+    reason = refund_data.get('reason', '无理由')
+    
+    # Check transaction status and get details
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             'SELECT status, from_address, to_address, amount FROM transactions WHERE tx_id = ?',
@@ -435,38 +549,167 @@ async def refund_transaction(tx_id: str) -> Dict[str, Any]:
         
         current_status, buyer_addr, seller_addr, amount = row
         
-        # Only allow refund for 'disputed' status
-        if current_status != 'disputed':
+        # Only allow refund request for these statuses
+        if current_status not in ['paid', 'shipped', 'delivered']:
             raise HTTPException(
                 status_code=400,
-                detail=f"Cannot refund transaction with status '{current_status}'. Only 'disputed' orders can be refunded."
+                detail=f"Cannot request refund for status '{current_status}'."
             )
+        
+        # Update transaction status to 'refund_requested'
+        await db.execute(
+            'UPDATE transactions SET status = ? WHERE tx_id = ?',
+            ('refund_requested', tx_id)
+        )
+        
+        # Create refund request record
+        from datetime import datetime, timedelta
+        deadline = datetime.now() + timedelta(hours=48)
+        
+        await db.execute('''
+            INSERT INTO arbitration_records 
+            (tx_id, buyer_address, seller_address, buyer_reason, status, deadline)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (tx_id, buyer_addr, seller_addr, reason, 'refund_pending', deadline.isoformat()))
+        
+        await db.commit()
     
-    # Refund to buyer's AI wallet
+    print(f"[Refund] Buyer requested refund for order {tx_id}, waiting for seller approval")
+    
+    return {
+        "message": "Refund requested. Seller has 48 hours to approve or reject.",
+        "tx_id": tx_id,
+        "status": "refund_requested",
+        "deadline": deadline.isoformat()
+    }
+
+
+@router.post("/api/v1/refunds/{tx_id}/approve")
+async def approve_refund(tx_id: str) -> Dict[str, Any]:
+    """
+    Seller approves refund request. Money is returned to buyer immediately.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
+        # Check refund request status
+        cursor = await db.execute(
+            'SELECT status, from_address, to_address, amount FROM transactions WHERE tx_id = ?',
+            (tx_id,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        
+        current_status, buyer_addr, seller_addr, amount = row
+        
+        if current_status != 'refund_requested':
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot approve refund for status '{current_status}'."
+            )
+        
+        # Refund to buyer's AI wallet (Atomic Operation)
         await db.execute(
             'UPDATE ai_wallets SET balance = balance + ? WHERE address = ?',
             (amount, buyer_addr)
         )
+        
+        # Update transaction status to 'refunded'
+        await db.execute(
+            'UPDATE transactions SET status = ? WHERE tx_id = ?',
+            ('refunded', tx_id)
+        )
+        
+        # Cancel all pending referral rewards
+        await db.execute('''
+            UPDATE transaction_referrals 
+            SET settlement_status = 'cancelled'
+            WHERE tx_id = ?
+        ''', (tx_id,))
+        
+        # Update arbitration record
+        await db.execute('''
+            UPDATE arbitration_records 
+            SET status = 'completed', verdict = 'buyer_wins', 
+                verdict_reason = 'Seller approved refund', resolved_at = ?
+            WHERE tx_id = ?
+        ''', (datetime.now().isoformat(), tx_id))
+        
+        # Increment dispute count for both parties (they had a dispute)
+        await db.execute('''
+            UPDATE users SET dispute_count = dispute_count + 1
+            WHERE address IN (?, ?)
+        ''', (buyer_addr, seller_addr))
+        
         await db.commit()
     
-    # Update transaction status to 'refunded'
-    await update_transaction_status(tx_id, 'refunded')
-    
-    # Cancel all pending referral rewards
-    await cancel_referral_rewards(tx_id)
-    
-    # Cancel auto-confirm countdown if exists
-    try:
-        from src.anchor.auto_confirm import auto_confirm_service
-        await auto_confirm_service.cancel_countdown(tx_id)
-    except:
-        pass
+    print(f"[Refund] Seller approved refund for order {tx_id}")
     
     return {
-        "message": f"Refunded {amount} USDT to buyer {buyer_addr}",
+        "message": f"Refund approved. {amount} USDT returned to buyer.",
         "tx_id": tx_id,
         "status": "refunded"
+    }
+
+
+@router.post("/api/v1/refunds/{tx_id}/reject")
+async def reject_refund(tx_id: str, reject_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    """
+    Seller rejects refund request. Arbitration is triggered automatically.
+    """
+    if reject_data is None:
+        reject_data = {}
+    
+    reason = reject_data.get('reason', '无理由拒绝')
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Check refund request status
+        cursor = await db.execute(
+            'SELECT status, from_address, to_address, amount, contract_hash, file_hash FROM transactions WHERE tx_id = ?',
+            (tx_id,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        
+        current_status, buyer_addr, seller_addr, amount, contract_hash, file_hash = row
+        
+        if current_status != 'refund_requested':
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot reject refund for status '{current_status}'."
+            )
+        
+        # Update transaction status to 'disputed'
+        await db.execute(
+            'UPDATE transactions SET status = ? WHERE tx_id = ?',
+            ('disputed', tx_id)
+        )
+        
+        # Update arbitration record to start arbitration
+        await db.execute('''
+            UPDATE arbitration_records 
+            SET status = 'evidence_collection', seller_evidence = ?
+            WHERE tx_id = ?
+        ''', (reason, tx_id))
+        
+        await db.commit()
+    
+    # Start arbitration countdown (48 hours)
+    try:
+        from src.anchor.arbitration_timer import arbitration_timer_service
+        await arbitration_timer_service.start_arbitration_countdown(tx_id, hours=48)
+        print(f"[Arbitration] Started 48h countdown for order {tx_id} after seller rejection")
+    except Exception as e:
+        print(f"[Arbitration] Failed to start countdown: {e}")
+    
+    print(f"[Refund] Seller rejected refund for order {tx_id}, arbitration started")
+    
+    return {
+        "message": "Refund rejected. Arbitration started.",
+        "tx_id": tx_id,
+        "status": "disputed"
     }
 
 
@@ -1440,20 +1683,20 @@ async def user_login(data: Dict[str, Any]) -> Dict[str, Any]:
             FROM users WHERE email = ? AND password_hash = ?
         ''', (email, password_hash))
         user = await cursor.fetchone()
-    
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    
-    if not user['is_verified']:
-        raise HTTPException(status_code=400, detail="Account not verified")
-    
-    # Get AI wallet address from sub_wallets
-    cursor = await db.execute(
-        'SELECT wallet_address FROM sub_wallets WHERE user_address = ? AND wallet_type = ?',
-        (user['address'], 'ai')
-    )
-    ai_row = await cursor.fetchone()
-    ai_address = ai_row[0] if ai_row else None
+        
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        if not user['is_verified']:
+            raise HTTPException(status_code=400, detail="Account not verified")
+        
+        # Get AI wallet address from sub_wallets (within same connection)
+        cursor = await db.execute(
+            'SELECT wallet_address FROM sub_wallets WHERE user_address = ? AND wallet_type = ?',
+            (user['address'], 'ai')
+        )
+        ai_row = await cursor.fetchone()
+        ai_address = ai_row[0] if ai_row else None
     
     # Generate mock JWT token
     token = hashlib.sha256(f"{email}_{datetime.now().isoformat()}".encode()).hexdigest()
@@ -1574,6 +1817,48 @@ async def get_referrals(address: str) -> ReferralResponse:
         referrals=[]
     )
 
+@router.get("/api/v1/referrals/records")
+async def get_referral_records(limit: int = Query(50, ge=1, le=100)) -> Dict[str, Any]:
+    """
+    Get recent referral settlement records.
+    Useful for debugging and auditing commission flows.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT * FROM transaction_referrals ORDER BY id DESC LIMIT ?',
+            (limit,)
+        )
+        rows = await cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+        records = [dict(zip(columns, row)) for row in rows]
+    
+    return {"records": records, "total": len(records)}
+
+@router.get("/api/v1/users/referral-network")
+async def get_user_referral_network() -> Dict[str, Any]:
+    """
+    Get all users and their referral relationships.
+    Shows who referred whom (tu1, tu2, tu3 chain).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Get all users with referral info
+        cursor = await db.execute(
+            'SELECT address, email, tu1, tu2, tu3 FROM users'
+        )
+        users = await cursor.fetchall()
+        
+        result = []
+        for u in users:
+            result.append({
+                "address": u[0],
+                "email": u[1],
+                "tu1": u[2],  # First-level referrer
+                "tu2": u[3],  # Second-level referrer
+                "tu3": u[4]   # Third-level referrer
+            })
+        
+        return {"users": result, "total": len(result)}
+
 
 # ============================================
 # Product Management APIs
@@ -1636,6 +1921,16 @@ async def create_new_product(product: ProductCreate) -> Dict[str, Any]:
     """
     print(f"[DEBUG] 收到商品发布请求: {product.name}, seller={product.seller_address}")
     try:
+        # Validate seller exists in users table
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute('SELECT address FROM users WHERE address = ?', (product.seller_address,))
+            user = await cursor.fetchone()
+            if not user:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Seller address {product.seller_address} is not registered. Please register first."
+                )
+        
         # Check reputation score
         if product.reputation_score < 60:
             raise HTTPException(
@@ -1679,19 +1974,29 @@ async def create_new_product(product: ProductCreate) -> Dict[str, Any]:
         # Create product in database
         product_id = await create_product(product_data)
         
-        # Anchor contract hash to GitHub (White Paper Section 2.7)
-        try:
-            anchor_service = GitHubAnchorService()
-            await anchor_service.anchor_contract_hash(contract_hash, product_id)
-        except Exception as e:
-            print(f"Warning: Failed to anchor to GitHub: {e}")
+        # Calculate Estimated Stake Requirement (B2P Protocol)
+        from src.db.transaction_db import get_user_reputation, get_arbitration_requirements
+        user_rep = await get_user_reputation(product.seller_address)
+        dispute_count = user_rep.get('dispute_count', 0) if user_rep else 0
+        reqs = await get_arbitration_requirements(dispute_count)
+        
+        estimated_total_stake = 0
+        if product.max_sales_volume and product.max_sales_volume > 0:
+            estimated_total_stake = product.price * product.max_sales_volume * reqs['stake_percentage']
         
         return {
             "message": "Product created successfully",
             "product_id": product_id,
             "contract_hash": contract_hash,
             "file_hash": product.file_hash,
-            "status": "active"
+            "status": "active",
+            "risk_assessment": {
+                "dispute_level": reqs['level'],
+                "stake_percentage_per_order": reqs['stake_percentage'],
+                "evidence_deadline_hours": reqs['deadline_hours'],
+                "estimated_total_stake_locked": round(estimated_total_stake, 2),
+                "currency": product.currency
+            }
         }
     except HTTPException:
         raise

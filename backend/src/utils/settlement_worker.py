@@ -13,7 +13,7 @@ def process_referral_creation(tx_id: str, tu1_addr: str, tu1_amount: float,
                                tu3_addr: str, tu3_amount: float):
     """
     Create referral record in transaction_referrals table.
-    Called by RQ worker when order is created.
+    Called by RQ worker when order is created (Async Pre-write).
     """
     print(f"[Referral Worker] Creating referral record for order {tx_id}")
     asyncio.run(_process_referral_creation_async(
@@ -74,15 +74,15 @@ async def _process_settlement_async(order_id: str, seller_addr: str, seller_amou
     """Async implementation of settlement processing."""
     async with aiosqlite.connect(DB_PATH) as db:
         try:
-            # 1. Credit seller AI wallet (90%)
+            # 1. Credit seller AI wallet (90%) - Atomic Update
             if seller_addr and seller_amount > 0:
                 await db.execute(
                     'UPDATE users SET ai_balance = ai_balance + ? WHERE ai_address = ?',
                     (seller_amount, seller_addr)
                 )
                 await db.execute(
-                    'UPDATE ai_wallets SET balance = balance + ? WHERE address = ?',
-                    (seller_amount, seller_addr)
+                    'UPDATE ai_wallets SET balance = balance + ?, total_earned = total_earned + ? WHERE address = ?',
+                    (seller_amount, seller_amount, seller_addr)
                 )
                 print(f"  ✓ Credited {seller_amount} to seller: {seller_addr}")
             

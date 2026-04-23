@@ -35,7 +35,12 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",    # Vite dev server
+        "http://localhost:3000",    # Production frontend
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -53,6 +58,8 @@ auto_confirm_service = None
 class DisputeRequest(BaseModel):
     reason: Optional[str] = "Hash mismatch or non-delivery"
 
+from src.utils.batch_writer import log_writer, referral_writer
+
 @app.on_event("startup")
 async def startup_event():
     global core_db, anchor_scheduler, auto_confirm_service
@@ -60,6 +67,10 @@ async def startup_event():
     # Initialize Core DB (1号员工)
     await init_db()
     core_db = CoreDB(os.getenv("DB_PATH", "./black2.db"))
+    
+    # Start async batch writers for high-concurrency optimization
+    await log_writer.start()
+    await referral_writer.start()
     
     # Initialize Anchor Service (2号员工)
     anchor_service = AnchorService(core_db)
@@ -72,40 +83,26 @@ async def startup_event():
     auto_confirm_service = acs
     await auto_confirm_service.initialize_pending_countdowns()
     
-    print("Black2 System Started: API + Anchoring + Arbitration + AutoConfirm")
+    # Initialize Arbitration Timer Service
+    from src.anchor.arbitration_timer import arbitration_timer_service as ats
+    await ats.initialize_pending_arbitrations()
+    
+    # Start Local Settlement Worker (for Windows compatibility)
+    try:
+        from src.utils.local_worker import start_listener
+        start_listener()
+    except Exception as e:
+        print(f"Warning: Could not start local worker: {e}")
+    
+    print("Black2 System Started: API + Anchoring + Arbitration + AutoConfirm + Worker")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     if anchor_scheduler:
         await anchor_scheduler.stop()
-
-@app.post("/api/v1/transactions/{tx_id}/dispute")
-async def create_dispute(tx_id: str, request: DisputeRequest):
-    """
-    Initiate a dispute for a transaction.
-    Integrates 4号 employee's Arbitrator.
-    """
-    tx = await get_transaction(tx_id)
-    if not tx:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    if tx['status'] != 'delivered' and tx['status'] != 'pending':
-        raise HTTPException(status_code=400, detail="Transaction cannot be disputed in current status")
-
-    # Trigger Arbitration (4号员工)
-    arbitrator = Arbitrator()
-    result = arbitrator.arbitrate(tx_id, tx['contract_hash'], tx.get('file_hash'))
-    
-    # Update status based on verdict
-    new_status = 'refunded' if result['verdict'] == 'buyer_wins' else 'completed'
-    await update_transaction_status(tx_id, new_status)
-    
-    return {
-        "tx_id": tx_id,
-        "arbitration_result": result,
-        "new_status": new_status,
-        "reason": request.reason
-    }
+    # Stop batch writers gracefully
+    await log_writer.stop()
+    await referral_writer.stop()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "3000"))

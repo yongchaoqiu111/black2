@@ -164,6 +164,7 @@ async def init_db():
                 description TEXT,
                 price REAL NOT NULL,
                 currency TEXT DEFAULT 'USD',
+                max_sales_volume INTEGER DEFAULT 100,  -- Seller's estimated sales cap for risk control
                 category TEXT,
                 version TEXT,
                 system_requirements TEXT,
@@ -203,6 +204,25 @@ async def init_db():
             )
         ''')
         
+        # Create arbitration_records table
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS arbitration_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_id TEXT UNIQUE NOT NULL,
+                buyer_address TEXT NOT NULL,
+                seller_address TEXT NOT NULL,
+                buyer_reason TEXT,
+                seller_evidence TEXT,
+                status TEXT DEFAULT 'pending',  -- pending, evidence_collection, arbitrating, completed
+                verdict TEXT,  -- buyer_wins, seller_wins
+                verdict_reason TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                deadline DATETIME,
+                resolved_at DATETIME,
+                FOREIGN KEY (tx_id) REFERENCES transactions(tx_id)
+            )
+        ''')
+        
         # Create users table (for reputation system)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -215,8 +235,27 @@ async def init_db():
                 is_verified INTEGER DEFAULT 0,
                 verification_code TEXT,
                 verification_code_expires DATETIME,
+                purchase_count INTEGER DEFAULT 0,  -- 购买次数
+                sales_count INTEGER DEFAULT 0,  -- 销售次数
+                dispute_count INTEGER DEFAULT 0,  -- 仲裁次数（刺头指标）
+                last_dispute_at DATETIME,  -- 上次争议时间（用于时间衰减）
+                successful_streak INTEGER DEFAULT 0,  -- 连续成功交易数（用于行为对冲）
+                reputation_stake REAL DEFAULT 0,  -- 信誉质押金额（用于保证金修复）
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create reputation_history table
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS reputation_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_address TEXT NOT NULL,
+                score_change INTEGER NOT NULL,
+                new_score INTEGER NOT NULL,
+                reason TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_address) REFERENCES users(address)
             )
         ''')
         
@@ -255,6 +294,10 @@ async def init_db():
             if 'delivery_checklist' not in column_names:
                 await db.execute("ALTER TABLE products ADD COLUMN delivery_checklist TEXT DEFAULT '{}'")
                 print("[Migration] Added delivery_checklist column to products table")
+            
+            if 'max_sales_volume' not in column_names:
+                await db.execute("ALTER TABLE products ADD COLUMN max_sales_volume INTEGER DEFAULT 100")
+                print("[Migration] Added max_sales_volume column to products table")
         except Exception as e:
             print(f"[Migration] Warning: Could not check/add delivery_checklist: {e}")
         
@@ -281,6 +324,55 @@ async def init_db():
                 print("[Migration] Added notes column to deposits table")
         except Exception as e:
             print(f"[Migration] Warning: Could not check/add notes to deposits: {e}")
+        
+        # Check and add reputation fields to users table
+        try:
+            cursor = await db.execute("PRAGMA table_info(users)")
+            columns = await cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            if 'purchase_count' not in column_names:
+                await db.execute("ALTER TABLE users ADD COLUMN purchase_count INTEGER DEFAULT 0")
+                print("[Migration] Added purchase_count column to users table")
+            
+            if 'sales_count' not in column_names:
+                await db.execute("ALTER TABLE users ADD COLUMN sales_count INTEGER DEFAULT 0")
+                print("[Migration] Added sales_count column to users table")
+            
+            if 'dispute_count' not in column_names:
+                await db.execute("ALTER TABLE users ADD COLUMN dispute_count INTEGER DEFAULT 0")
+                print("[Migration] Added dispute_count column to users table")
+            
+            if 'last_dispute_at' not in column_names:
+                await db.execute("ALTER TABLE users ADD COLUMN last_dispute_at DATETIME")
+                print("[Migration] Added last_dispute_at column to users table")
+            
+            if 'successful_streak' not in column_names:
+                await db.execute("ALTER TABLE users ADD COLUMN successful_streak INTEGER DEFAULT 0")
+                print("[Migration] Added successful_streak column to users table")
+            
+            if 'reputation_stake' not in column_names:
+                await db.execute("ALTER TABLE users ADD COLUMN reputation_stake REAL DEFAULT 0")
+                print("[Migration] Added reputation_stake column to users table")
+        except Exception as e:
+            print(f"[Migration] Warning: Could not check/add reputation fields: {e}")
+        
+        # Create transaction_referrals table if not exists
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS transaction_referrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_id TEXT UNIQUE NOT NULL,
+                tu1_address TEXT,
+                tu1_amount REAL DEFAULT 0.0,
+                tu2_address TEXT,
+                tu2_amount REAL DEFAULT 0.0,
+                tu3_address TEXT,
+                tu3_amount REAL DEFAULT 0.0,
+                settlement_status TEXT DEFAULT 'pending',
+                settled_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         
         await db.commit()
 
@@ -634,40 +726,107 @@ async def add_referral_reward(
 async def settle_referral_rewards(tx_id: str):
     """
     Settle all pending referral rewards for a completed transaction.
-    Distribute points to referrers.
+    Distribute funds to seller and referrers (tu1, tu2, tu3).
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        # Get all pending rewards for this transaction
-        cursor = await db.execute('''
-            SELECT id, referrer_address, reward_amount, level
-            FROM referral_rewards
-            WHERE tx_id = ? AND status = 'pending'
-        ''', (tx_id,))
-        
-        rewards = await cursor.fetchall()
-        
-        for reward in rewards:
-            reward_id, referrer_address, amount, level = reward
+        try:
+            # Get referral info from transaction_referrals
+            cursor = await db.execute('''
+                SELECT tu1_address, tu1_amount, tu2_address, tu2_amount, tu3_address, tu3_amount
+                FROM transaction_referrals
+                WHERE tx_id = ?
+            ''', (tx_id,))
             
-            # Update reward status to completed
-            await db.execute('''
-                UPDATE referral_rewards SET 
-                    status = 'completed',
-                    settled_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (reward_id,))
+            referral = await cursor.fetchone()
             
-            # Add points to referrer's AI wallet
-            await db.execute('''
-                UPDATE ai_wallets SET 
-                    balance = balance + ?,
-                    total_earned = total_earned + ?,
-                    referral_count = referral_count + 1
-                WHERE address = ?
-            ''', (amount, amount, referrer_address))
-        
-        await db.commit()
-        return len(rewards)
+            if not referral:
+                print(f"[Settle] No referral record found for {tx_id}")
+                return 0
+            
+            tu1_addr, tu1_amount, tu2_addr, tu2_amount, tu3_addr, tu3_amount = referral
+            
+            # Get seller info from transactions table
+            cursor = await db.execute(
+                'SELECT amount, to_address FROM transactions WHERE tx_id = ?',
+                (tx_id,)
+            )
+            tx_info = await cursor.fetchone()
+            
+            if not tx_info:
+                print(f"[Settle] No transaction found for {tx_id}")
+                return 0
+            
+            order_amount, seller_addr = tx_info
+            seller_amount = round(order_amount * 0.90, 2)
+            
+            # 1. Credit seller AI wallet (90%)
+            if seller_addr and seller_amount > 0:
+                await db.execute(
+                    'UPDATE users SET ai_balance = ai_balance + ? WHERE ai_address = ?',
+                    (seller_amount, seller_addr)
+                )
+                await db.execute(
+                    'UPDATE ai_wallets SET balance = balance + ?, total_earned = total_earned + ? WHERE address = ?',
+                    (seller_amount, seller_amount, seller_addr)
+                )
+                print(f"  ✓ Credited {seller_amount} to seller: {seller_addr}")
+            
+            # 2. Credit tu1 AI wallet (5%)
+            if tu1_addr and tu1_amount > 0:
+                await db.execute(
+                    'UPDATE users SET ai_balance = ai_balance + ? WHERE ai_address = ?',
+                    (tu1_amount, tu1_addr)
+                )
+                await db.execute(
+                    'UPDATE ai_wallets SET balance = balance + ? WHERE address = ?',
+                    (tu1_amount, tu1_addr)
+                )
+                print(f"  ✓ Credited {tu1_amount} to tu1: {tu1_addr}")
+            
+            # 3. Credit tu2 AI wallet (3%)
+            if tu2_addr and tu2_amount > 0:
+                await db.execute(
+                    'UPDATE users SET ai_balance = ai_balance + ? WHERE ai_address = ?',
+                    (tu2_amount, tu2_addr)
+                )
+                await db.execute(
+                    'UPDATE ai_wallets SET balance = balance + ? WHERE address = ?',
+                    (tu2_amount, tu2_addr)
+                )
+                print(f"  ✓ Credited {tu2_amount} to tu2: {tu2_addr}")
+            
+            # 4. Credit tu3 AI wallet (2%)
+            if tu3_addr and tu3_amount > 0:
+                await db.execute(
+                    'UPDATE users SET ai_balance = ai_balance + ? WHERE ai_address = ?',
+                    (tu3_amount, tu3_addr)
+                )
+                await db.execute(
+                    'UPDATE ai_wallets SET balance = balance + ? WHERE address = ?',
+                    (tu3_amount, tu3_addr)
+                )
+                print(f"  ✓ Credited {tu3_amount} to tu3: {tu3_addr}")
+            
+            # Mark referral as settled
+            await db.execute(
+                "UPDATE transaction_referrals SET settlement_status = 'completed', settled_at = ? WHERE tx_id = ?",
+                (datetime.datetime.utcnow().isoformat(), tx_id)
+            )
+            
+            await db.commit()
+            print(f"[Settle] Settlement completed for {tx_id}")
+            return 1
+            
+        except Exception as e:
+            await db.rollback()
+            print(f"[Settle] Error settling rewards for {tx_id}: {e}")
+            # Mark as failed
+            await db.execute(
+                "UPDATE transaction_referrals SET settlement_status = 'failed' WHERE tx_id = ?",
+                (tx_id,)
+            )
+            await db.commit()
+            raise
 
 
 async def cancel_referral_rewards(tx_id: str):
@@ -679,6 +838,31 @@ async def cancel_referral_rewards(tx_id: str):
             UPDATE referral_rewards SET status = 'cancelled'
             WHERE tx_id = ? AND status = 'pending'
         ''', (tx_id,))
+        await db.commit()
+
+
+async def deduct_ai_wallet_balance(address: str, amount: float) -> bool:
+    """
+    Atomically deduct balance from AI wallet with overdraft protection.
+    Returns True if successful, False if insufficient balance.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        result = await db.execute('''
+            UPDATE ai_wallets SET balance = balance - ? 
+            WHERE address = ? AND balance >= ?
+        ''', (amount, address, amount))
+        await db.commit()
+        return result.rowcount > 0
+
+async def add_ai_wallet_balance(address: str, amount: float):
+    """
+    Atomically add balance to AI wallet.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            UPDATE ai_wallets SET balance = balance + ? 
+            WHERE address = ?
+        ''', (amount, address))
         await db.commit()
 
 
@@ -1198,9 +1382,128 @@ async def calculate_margin_percentage(reputation_score: int) -> float:
         return 0.0  # Cannot publish
 
 
+async def get_arbitration_requirements(dispute_count: int) -> Dict[str, Any]:
+    """
+    Get arbitration requirements based on seller's dispute history (B2P Protocol).
+    Returns required stake percentage and evidence submission deadline.
+    """
+    if dispute_count > 20:
+        return {
+            "stake_percentage": 0.20,  # 20% additional stake
+            "deadline_hours": 0.5,     # 30 minutes
+            "level": "high_risk"
+        }
+    elif dispute_count > 10:
+        return {
+            "stake_percentage": 0.10,  # 10% additional stake
+            "deadline_hours": 12,      # 12 hours
+            "level": "medium_risk"
+        }
+    elif dispute_count > 5:
+        return {
+            "stake_percentage": 0.05,  # 5% additional stake
+            "deadline_hours": 24,      # 24 hours
+            "level": "low_risk"
+        }
+    else:
+        return {
+            "stake_percentage": 0.0,
+            "deadline_hours": 48,      # Standard 48 hours
+            "level": "normal"
+        }
+
+
+async def execute_arbitration_verdict(tx_id: str, verdict: str, seller_address: str, dispute_count: int):
+    """
+    Execute the final verdict of an arbitration case.
+    Handles fund redistribution and penalty collection for 'Thorn' sellers.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 1. Get transaction details
+        cursor = await db.execute('SELECT amount, buyer_address FROM transactions WHERE tx_id = ?', (tx_id,))
+        tx = await cursor.fetchone()
+        if not tx:
+            return
+        
+        amount, buyer_address = tx
+        
+        if verdict == 'refund_buyer':
+            # A. Refund principal to buyer (Protected)
+            await db.execute(
+                'UPDATE wallets SET balance = balance + ? WHERE address = ?',
+                (amount, buyer_address)
+            )
+            
+            # B. Apply Penalty to Seller (If Thorn)
+            penalty = 0
+            if dispute_count > 20:
+                penalty = amount * 0.05  # 5% penalty from seller's stake
+            elif dispute_count > 10:
+                penalty = 2.0  # Fixed filing fee
+            
+            if penalty > 0:
+                # Deduct from seller's wallet/stake
+                await db.execute(
+                    'UPDATE wallets SET balance = balance - ? WHERE address = ?',
+                    (penalty, seller_address)
+                )
+                # Inject into Arbitration Fund
+                await db.execute(
+                    'INSERT INTO arbitration_fund_pool (amount, source_tx_id, reason) VALUES (?, ?, ?)',
+                    (penalty, tx_id, f'Penalty for high-friction seller (disputes: {dispute_count})')
+                )
+                
+            await db.execute('UPDATE transactions SET status = ? WHERE tx_id = ?', ('refunded', tx_id))
+            
+        elif verdict == 'release_seller':
+            # A. Release principal + Additional Stake to seller (Vindication Loop)
+            reqs = await get_arbitration_requirements(dispute_count)
+            additional_stake = amount * reqs['stake_percentage']
+            total_release = amount + additional_stake
+            
+            await db.execute(
+                'UPDATE wallets SET balance = balance + ? WHERE address = ?',
+                (total_release, seller_address)
+            )
+            
+            # B. Reputation Repair: Increase successful streak & score
+            await db.execute(
+                'UPDATE users SET successful_streak = successful_streak + 1, reputation_score = MIN(100, reputation_score + 2) WHERE address = ?',
+                (seller_address,)
+            )
+            
+            await db.execute('UPDATE transactions SET status = ? WHERE tx_id = ?', ('completed', tx_id))
+        
+        await db.commit()
+    """
+    Calculate the cost and restrictions for initiating arbitration based on seller's history.
+    Implements the 'Thorn' penalty logic from B2P Protocol.
+    """
+    cost = 0
+    extra_stake_pct = 0
+    
+    if dispute_count > 20:
+        # Level 3: High friction - Filing fee + Heavy stake
+        cost = 5.0  # USDT filing fee
+        extra_stake_pct = 0.10
+    elif dispute_count > 10:
+        # Level 2: Medium friction - Filing fee
+        cost = 2.0  # USDT filing fee
+    elif dispute_count > 5:
+        # Level 1: Low friction - Extra stake required
+        extra_stake_pct = 0.05
+    
+    return {
+        "filing_fee": cost,
+        "extra_stake_percentage": extra_stake_pct,
+        "is_restricted": dispute_count > 20
+    }
+
+
 async def get_user_reputation(address: str) -> Optional[Dict[str, Any]]:
     """
-    Get user's current reputation info.
+    Get user's current reputation info including friction index.
+    Implements Time Decay and Behavioral Offset logic (B2P Standard).
     
     Args:
         address: User wallet address
@@ -1210,7 +1513,7 @@ async def get_user_reputation(address: str) -> Optional[Dict[str, Any]]:
     """
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            'SELECT address, reputation_score, created_at, updated_at FROM users WHERE address = ?',
+            'SELECT address, reputation_score, dispute_count, purchase_count, sales_count, last_dispute_at, successful_streak, reputation_stake FROM users WHERE address = ?',
             (address,)
         )
         row = await cursor.fetchone()
@@ -1220,6 +1523,28 @@ async def get_user_reputation(address: str) -> Optional[Dict[str, Any]]:
         
         columns = [description[0] for description in cursor.description]
         user_data = dict(zip(columns, row))
+        
+        # 1. Time Decay Logic
+        effective_disputes = user_data.get('dispute_count', 0)
+        last_dispute_str = user_data.get('last_dispute_at')
+        if last_dispute_str:
+            from datetime import datetime
+            last_dispute = datetime.fromisoformat(last_dispute_str)
+            days_since = (datetime.now() - last_dispute).days
+            if days_since > 90:
+                effective_disputes = max(0, effective_disputes * 0.5)
+        
+        # 2. Calculate Transaction Friction Index
+        total_tx = (user_data.get('purchase_count', 0) + user_data.get('sales_count', 0))
+        friction_index = (effective_disputes / total_tx * 100) if total_tx > 0 else 0
+        
+        # 3. Behavioral Offset
+        streak = user_data.get('successful_streak', 0)
+        if streak >= 10:
+            friction_index = max(0, friction_index - (streak // 10))
+        
+        user_data['friction_index'] = round(friction_index, 2)
+        user_data['risk_level'] = "low" if friction_index < 5 else ("medium" if friction_index < 15 else "high")
         
         # Calculate margin percentage
         margin_pct = await calculate_margin_percentage(user_data['reputation_score'])

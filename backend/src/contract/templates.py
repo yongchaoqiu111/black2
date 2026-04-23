@@ -12,7 +12,7 @@ import json
 
 # Standard contract templates
 CONTRACT_TEMPLATES = {
-    "software_sale": {
+    "TPL_SOFTWARE_001": {
         "template_id": "TPL_SOFTWARE_001",
         "name": "软件/工具销售合约",
         "version": "1.0",
@@ -29,7 +29,7 @@ CONTRACT_TEMPLATES = {
         }
     },
     
-    "ai_custom_task": {
+    "TPL_AI_TASK_001": {
         "template_id": "TPL_AI_TASK_001",
         "name": "AI定制化任务合约",
         "version": "1.0",
