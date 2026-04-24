@@ -13,8 +13,8 @@
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <div 
           v-for="product in products" 
-          :key="product.id"
-          @click="goToProduct(product.id)"
+          :key="product.product_id"
+          @click="goToProduct(product)"
           class="bg-white rounded-lg shadow-md overflow-hidden cursor-pointer hover:shadow-xl transition-shadow"
         >
           <!-- Product Image -->
@@ -57,30 +57,25 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useProductStore } from '@/stores/product'
 
 const router = useRouter()
+const productStore = useProductStore()
 
 const products = ref([])
 const loading = ref(true)
 
-// Load products from backend
+// Load products from backend and cache in Store
 onMounted(async () => {
-  try {
-    const response = await fetch('/api/v1/products')
-    const data = await response.json()
-    
-    if (response.ok && data.products) {
-      products.value = data.products
-    }
-  } catch (error) {
-    console.error('Failed to load products:', error)
-  } finally {
-    loading.value = false
-  }
+  const data = await productStore.fetchProducts()
+  products.value = data
+  loading.value = false
 })
 
-const goToProduct = (id) => {
-  router.push(`/product/${id}`)
+const goToProduct = (product) => {
+  console.log('Navigating to product:', product)
+  productStore.setCurrentProduct(product)
+  router.push(`/product/${product.product_id}`)
 }
 </script>
 

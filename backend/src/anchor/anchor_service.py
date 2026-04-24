@@ -23,12 +23,30 @@ class AnchorService:
         self.gist_id = os.getenv("ANCHOR_GITHUB_GIST_ID", "")
 
     def calculate_root_hash(self, transactions: list) -> str:
+        """
+        Calculate Merkle Root Hash for a batch of transactions.
+        If no transactions, return empty hash.
+        """
         if not transactions:
             return hashlib.sha256(b"empty").hexdigest()
 
-        sorted_txs = sorted(transactions, key=lambda x: x["timestamp"])
-        combined = "".join(tx["tx_hash"] for tx in sorted_txs)
-        return hashlib.sha256(combined.encode()).hexdigest()
+        # Extract and sort transaction hashes
+        tx_hashes = [hashlib.sha256(tx["tx_hash"].encode()).hexdigest() for tx in transactions]
+        tx_hashes.sort()
+
+        # Build Merkle Tree
+        while len(tx_hashes) > 1:
+            if len(tx_hashes) % 2 != 0:
+                tx_hashes.append(tx_hashes[-1])  # Duplicate last hash if odd number
+            
+            next_level = []
+            for i in range(0, len(tx_hashes), 2):
+                combined = tx_hashes[i] + tx_hashes[i+1]
+                next_level.append(hashlib.sha256(combined.encode()).hexdigest())
+            
+            tx_hashes = next_level
+
+        return tx_hashes[0]
 
     async def anchor_to_gist(self, root_hash: str, transaction_count: int, previous_anchor: Optional[str]) -> dict:
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -77,36 +95,34 @@ class AnchorService:
             }
 
     async def perform_anchor(self) -> Optional[dict]:
+        from src.anchor.github_anchor import GitHubAnchorService
+        
         transactions = await self.db.get_unanchored_transactions()
-
         if not transactions:
             return None
 
-        root_hash = self.calculate_root_hash(transactions)
-        previous_anchor = await self.db.get_latest_anchor()
-        previous_anchor_hash = previous_anchor["root_hash"] if previous_anchor else None
-        transaction_count = len(transactions)
-
-        anchor_timestamp = datetime.now(timezone.utc).isoformat()
-
-        result = await self.anchor_to_gist(root_hash, transaction_count, previous_anchor_hash)
-
-        tx_hashes = [tx["tx_hash"] for tx in transactions]
-        await self.db.anchor_transactions(tx_hashes, root_hash, anchor_timestamp)
-
-        await self.db.add_anchor_record(
-            root_hash=root_hash,
-            transaction_count=transaction_count,
-            gist_url=result["gist_url"],
-            gist_commit_hash=result["gist_commit_hash"],
-            anchor_timestamp=anchor_timestamp,
-            previous_anchor=previous_anchor_hash
-        )
-
-        return {
-            "root_hash": root_hash,
-            "transaction_count": transaction_count,
-            "gist_url": result["gist_url"],
-            "gist_commit_hash": result["gist_commit_hash"],
-            "anchor_timestamp": anchor_timestamp
-        }
+        # Extract hashes for Merkle Root calculation
+        tx_hashes = [tx['tx_hash'] for tx in transactions]
+        
+        try:
+            anchor_svc = GitHubAnchorService()
+            batch_id = f"BATCH_{int(datetime.now(timezone.utc).timestamp())}"
+            
+            result = await anchor_svc.anchor_batch_transactions(
+                transaction_hashes=tx_hashes,
+                batch_id=batch_id
+            )
+            
+            # Mark transactions as anchored in DB
+            await self.db.anchor_transactions(tx_hashes, result['merkle_root'], result['anchor_timestamp'])
+            
+            return {
+                "root_hash": result['merkle_root'],
+                "transaction_count": result['transaction_count'],
+                "gist_url": result['commit_url'],
+                "gist_commit_hash": result['commit_sha'],
+                "anchor_timestamp": result['anchor_timestamp']
+            }
+        except Exception as e:
+            print(f"[Anchor] Failed to push to GitHub: {e}")
+            return None

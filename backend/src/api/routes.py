@@ -390,55 +390,79 @@ async def dispute_transaction(tx_id: str, dispute_data: Dict[str, Any] = None) -
                 detail=f"Cannot dispute transaction with status '{current_status}'."
             )
         
-        # Update transaction status to 'disputed'
-        await db.execute(
-            'UPDATE transactions SET status = ? WHERE tx_id = ?',
-            ('disputed', tx_id)
-        )
+        # Micro-transaction Instant Arbitration Logic
+        is_micro = amount < 1.0  # Define micro-transaction threshold
+        auto_refund_triggered = False
         
-        # Create arbitration record
-        from datetime import datetime, timedelta
-        deadline = datetime.now() + timedelta(hours=48)
-        
-        await db.execute('''
-            INSERT INTO arbitration_records 
-            (tx_id, buyer_address, seller_address, buyer_reason, status, deadline)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (tx_id, buyer_addr, seller_addr, reason, 'evidence_collection', deadline.isoformat()))
+        if is_micro and contract_hash and file_hash:
+            if contract_hash != file_hash:
+                # Hash mismatch: Seller breached contract, instant refund
+                print(f"[Micro-Arbitration] Hash mismatch detected for {tx_id}. Auto-refunding...")
+                await db.execute('UPDATE transactions SET status = ? WHERE tx_id = ?', ('refunded', tx_id))
+                await db.execute('UPDATE ai_wallets SET balance = balance + ? WHERE address = ?', (amount, buyer_addr))
+                await db.execute('UPDATE users SET reputation_score = MAX(0, reputation_score - 5), dispute_count = dispute_count + 1 WHERE address = ?', (seller_addr,))
+                auto_refund_triggered = True
+            else:
+                # Hash match: Buyer is likely malicious, reject dispute
+                print(f"[Micro-Arbitration] Hashes match for {tx_id}. Dispute rejected.")
+                return {
+                    "message": "Dispute rejected. Delivery hash matches the contract hash.",
+                    "tx_id": tx_id,
+                    "status": current_status,
+                    "verdict": "seller_wins"
+                }
+
+        if not auto_refund_triggered:
+            # Standard dispute flow for high-value or missing hash cases
+            await db.execute(
+                'UPDATE transactions SET status = ? WHERE tx_id = ?',
+                ('disputed', tx_id)
+            )
+            
+            from datetime import datetime, timedelta
+            deadline = datetime.now() + timedelta(hours=48)
+            
+            await db.execute('''
+                INSERT INTO arbitration_records 
+                (tx_id, buyer_address, seller_address, buyer_reason, status, deadline)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (tx_id, buyer_addr, seller_addr, reason, 'evidence_collection', deadline.isoformat()))
         
         await db.commit()
     
     # Log dispute event asynchronously
-    try:
-        from src.utils.batch_writer import log_writer
-        await log_writer.add(
-            'INSERT INTO reputation_history (user_address, score_change, new_score, reason) VALUES (?, ?, ?, ?)',
-            ('SYSTEM', 0, 0, f'Transaction {tx_id} disputed at {datetime.now().isoformat()}')
-        )
-    except Exception as e:
-        print(f"[Log] Failed to queue dispute log: {e}")
-    
-    # Cancel auto-confirm countdown if exists
-    try:
-        from src.anchor.auto_confirm import auto_confirm_service
-        await auto_confirm_service.cancel_countdown(tx_id)
-        print(f"[Dispute] Cancelled auto-confirm countdown for order {tx_id}")
-    except Exception as e:
-        print(f"[Dispute] Failed to cancel countdown: {e}")
-    
-    # Start arbitration countdown
-    try:
-        from src.anchor.arbitration_timer import arbitration_timer_service
-        await arbitration_timer_service.start_arbitration_countdown(tx_id, hours=48)
-        print(f"[Arbitration] Started 48h countdown for order {tx_id}")
-    except Exception as e:
-        print(f"[Arbitration] Failed to start countdown: {e}")
+    if not auto_refund_triggered:
+        try:
+            from src.utils.batch_writer import log_writer
+            await log_writer.add(
+                'INSERT INTO reputation_history (user_address, score_change, new_score, reason) VALUES (?, ?, ?, ?)',
+                ('SYSTEM', 0, 0, f'Transaction {tx_id} disputed at {datetime.now().isoformat()}')
+            )
+        except Exception as e:
+            print(f"[Log] Failed to queue dispute log: {e}")
+        
+        # Cancel auto-confirm countdown if exists
+        try:
+            from src.anchor.auto_confirm import auto_confirm_service
+            await auto_confirm_service.cancel_countdown(tx_id)
+            print(f"[Dispute] Cancelled auto-confirm countdown for order {tx_id}")
+        except Exception as e:
+            print(f"[Dispute] Failed to cancel countdown: {e}")
+        
+        # Start arbitration countdown
+        try:
+            from src.anchor.arbitration_timer import arbitration_timer_service
+            await arbitration_timer_service.start_arbitration_countdown(tx_id, hours=48)
+            print(f"[Arbitration] Started 48h countdown for order {tx_id}")
+        except Exception as e:
+            print(f"[Arbitration] Failed to start countdown: {e}")
     
     return {
-        "message": "Dispute initiated. Transaction frozen. Seller has 48 hours to submit evidence.",
+        "message": "Dispute initiated. Transaction frozen. Seller has 48 hours to submit evidence." if not auto_refund_triggered else "Micro-transaction auto-refunded due to hash mismatch.",
         "tx_id": tx_id,
-        "status": "disputed",
-        "deadline": deadline.isoformat(),
+        "status": "refunded" if auto_refund_triggered else "disputed",
+        "verdict": "buyer_wins" if auto_refund_triggered else None,
+        "deadline": deadline.isoformat() if not auto_refund_triggered else None,
         "buyer_reason": reason
     }
 
@@ -1864,25 +1888,22 @@ async def get_user_referral_network() -> Dict[str, Any]:
 # Product Management APIs
 # ============================================
 
+class ProductSpecs(BaseModel):
+    runtime: str = ""
+    delivery_type: str = "source_code" # source_code, executable, dataset, api_key
+    format: str = ""
+    volume: str = ""
+    metrics: Dict[str, Any] = {}
+
 class ProductCreate(BaseModel):
     seller_address: str
     name: str
-    description: str = ""
+    description: str
     price: float
-    currency: str = "USD"
-    category: str = ""
-    version: str = ""
-    system_requirements: str = ""
-    contract_template: str = ""
-    metrics: List[Dict[str, Any]] = []
-    file_hash: str = ""
-    delivery_url: str = ""
-    delivery_method: str = ""
-    auto_confirm_hours: int = 72
-    storage_plan: str = ""
-    delivery_checklist: Dict[str, bool] = {}
-    reputation_score: int = 100
-    margin_percentage: float = 5.0
+    currency: str = "TRX"
+    category_id: str
+    delivery_hash: str
+    specs: ProductSpecs = ProductSpecs()
 
 class ProductResponse(BaseModel):
     product_id: str
@@ -1891,19 +1912,10 @@ class ProductResponse(BaseModel):
     description: str
     price: float
     currency: str
-    category: str
-    version: str
-    system_requirements: str
-    contract_template: str
-    metrics: List[Dict[str, Any]]
-    file_hash: str
-    delivery_url: str
-    delivery_method: str
-    auto_confirm_hours: int
-    storage_plan: str
-    delivery_checklist: Dict[str, bool]
-    reputation_score: int
-    margin_percentage: float
+    category_id: str
+    specs: Dict[str, Any]
+    delivery_hash: str
+    contract_hash: str
     status: str
     created_at: str
 
@@ -1911,96 +1923,36 @@ class ProductResponse(BaseModel):
 @router.post("/api/v1/products", response_model=Dict[str, Any])
 async def create_new_product(product: ProductCreate) -> Dict[str, Any]:
     """
-    Create a new product listing.
-    
-    - **seller_address**: Seller's wallet address
-    - **name**: Product name
-    - **price**: Product price
-    - **metrics**: Quantifiable metrics array
-    - **file_hash**: SHA-256 hash of product file
+    Create a new micro-transaction product listing (AI-Native).
     """
-    print(f"[DEBUG] 收到商品发布请求: {product.name}, seller={product.seller_address}")
+    print(f"[DEBUG] 收到微交易发布请求: {product.name}, seller={product.seller_address}")
     try:
-        # Validate seller exists in users table
+        # Validate seller exists
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute('SELECT address FROM users WHERE address = ?', (product.seller_address,))
             user = await cursor.fetchone()
             if not user:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Seller address {product.seller_address} is not registered. Please register first."
+                    detail=f"Seller address {product.seller_address} is not registered."
                 )
         
-        # Check reputation score
-        if product.reputation_score < 60:
-            raise HTTPException(
-                status_code=403,
-                detail="Reputation score too low to publish products (minimum 60)"
-            )
-        
-        # Validate metrics
-        if not product.metrics or len(product.metrics) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="At least one quantifiable metric is required"
-            )
-        
-        # Generate contract hash according to White Paper Section 2.7 Rule 1
-        # Contract Hash = SHA256(all contract terms + file_hash + seller_id + timestamp)
-        import json
-        contract_terms = {
-            'name': product.name,
-            'description': product.description,
-            'price': product.price,
-            'currency': product.currency,
-            'category': product.category,
-            'version': product.version,
-            'system_requirements': product.system_requirements,
-            'contract_template': product.contract_template,
-            'metrics': product.metrics,
-            'delivery_method': product.delivery_method,
-            'auto_confirm_hours': product.auto_confirm_hours,
-            'storage_plan': product.storage_plan
-        }
-        
-        # Create hash input string
-        hash_input = json.dumps(contract_terms, sort_keys=True) + product.file_hash + product.seller_address + datetime.now().isoformat()
-        contract_hash = hashlib.sha256(hash_input.encode()).hexdigest()
-        
-        # Add contract_hash to product_data
+        # Prepare data for DB (convert Pydantic model to dict)
         product_data = product.dict()
-        product_data['contract_hash'] = contract_hash
         
-        # Create product in database
+        # Create product in database (Contract Hash is generated inside create_product)
         product_id = await create_product(product_data)
         
-        # Calculate Estimated Stake Requirement (B2P Protocol)
-        from src.db.transaction_db import get_user_reputation, get_arbitration_requirements
-        user_rep = await get_user_reputation(product.seller_address)
-        dispute_count = user_rep.get('dispute_count', 0) if user_rep else 0
-        reqs = await get_arbitration_requirements(dispute_count)
-        
-        estimated_total_stake = 0
-        if product.max_sales_volume and product.max_sales_volume > 0:
-            estimated_total_stake = product.price * product.max_sales_volume * reqs['stake_percentage']
-        
         return {
-            "message": "Product created successfully",
+            "success": True,
             "product_id": product_id,
-            "contract_hash": contract_hash,
-            "file_hash": product.file_hash,
-            "status": "active",
-            "risk_assessment": {
-                "dispute_level": reqs['level'],
-                "stake_percentage_per_order": reqs['stake_percentage'],
-                "evidence_deadline_hours": reqs['deadline_hours'],
-                "estimated_total_stake_locked": round(estimated_total_stake, 2),
-                "currency": product.currency
-            }
+            "message": "Product listed successfully. Contract hash will be anchored in next batch."
         }
+        
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[ERROR] Failed to create product: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -74,7 +74,8 @@ async def startup_event():
     
     # Initialize Anchor Service (2号员工)
     anchor_service = AnchorService(core_db)
-    interval = int(os.getenv("ANCHOR_INTERVAL_HOURS", "1"))
+    interval = int(os.getenv("ANCHOR_INTERVAL_HOURS", "0"))  # Default to 0 for micro-transactions (5 min fallback)
+    # For micro-transactions, we use a shorter interval. If env is 0, we'll set it to 5 minutes in the scheduler.
     anchor_scheduler = AnchorScheduler(anchor_service, interval)
     anchor_scheduler.start()
     
@@ -105,7 +106,7 @@ async def shutdown_event():
     await referral_writer.stop()
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "3000"))
+    port = int(os.getenv("PORT", "3001"))
     uvicorn.run(
         "server:app",
         host="0.0.0.0",

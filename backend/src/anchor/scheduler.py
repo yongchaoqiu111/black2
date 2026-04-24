@@ -50,7 +50,9 @@ class AnchorScheduler:
             except Exception as e:
                 logger.error(f"Anchor failed: {e}")
 
-            await asyncio.sleep(self.interval_hours * 3600)
+            # Micro-transaction optimization: default to 5 minutes (300s) if interval is 0 or too small
+            sleep_time = max(300, self.interval_hours * 3600)
+            await asyncio.sleep(sleep_time)
 
     def start(self):
         if self._running:

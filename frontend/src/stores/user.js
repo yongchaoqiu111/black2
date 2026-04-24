@@ -35,6 +35,7 @@ export const useUserStore = defineStore('user', () => {
     user.value = null
     localStorage.removeItem('user')
     localStorage.removeItem('token')
+    localStorage.removeItem('walletAddress') // Clear any cached wallet address
     userInfo.value = {
       username: '',
       avatar: '',

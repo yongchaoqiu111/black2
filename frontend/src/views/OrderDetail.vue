@@ -111,7 +111,7 @@
 
         <!-- Action Buttons -->
         <div class="flex space-x-4 pt-6 border-t border-gray-200">
-          <!-- Paid Status: Buyer can download and confirm receipt -->
+          <!-- Paid Status: Buyer can download, confirm receipt, or request refund -->
           <template v-if="order.status === 'paid'">
             <button 
               @click="handleDownload"
@@ -130,15 +130,15 @@
             </button>
 
             <button 
-              @click="handleDispute"
-              class="flex-1 py-3 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors"
+              @click="handleRequestRefund"
+              class="flex-1 py-3 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700 transition-colors"
             >
-              <i class="fa-solid fa-gavel mr-2"></i>
-              申请仲裁
+              <i class="fa-solid fa-rotate-left mr-2"></i>
+              申请退款
             </button>
           </template>
 
-          <!-- Shipped Status: Buyer can confirm or dispute -->
+          <!-- Shipped Status: Buyer can confirm or request refund -->
           <template v-if="order.status === 'shipped'">
             <button 
               @click="handleConfirmReceipt"
@@ -149,11 +149,11 @@
             </button>
 
             <button 
-              @click="handleDispute"
-              class="flex-1 py-3 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors"
+              @click="handleRequestRefund"
+              class="flex-1 py-3 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700 transition-colors"
             >
-              <i class="fa-solid fa-gavel mr-2"></i>
-              申请仲裁
+              <i class="fa-solid fa-rotate-left mr-2"></i>
+              申请退款
             </button>
           </template>
 
@@ -175,21 +175,121 @@
 
           <!-- Disputed Status: Waiting for arbitration or can refund -->
           <template v-if="order.status === 'disputed'">
+            <!-- Arbitration Progress -->
             <div class="w-full bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-              <div class="flex items-center text-yellow-800 mb-2">
+              <div class="flex items-center text-yellow-800 mb-3">
                 <i class="fa-solid fa-triangle-exclamation mr-2"></i>
                 <span class="font-semibold">仲裁中</span>
               </div>
-              <p class="text-sm text-yellow-700">订单已冻结，等待仲裁委员会处理...</p>
+              
+              <!-- Arbitration Details -->
+              <div v-if="arbitrationInfo" class="space-y-3">
+                <div class="text-sm">
+                  <span class="text-gray-600">买家理由：</span>
+                  <p class="mt-1 text-gray-900">{{ arbitrationInfo.buyer_reason }}</p>
+                </div>
+                
+                <div v-if="arbitrationInfo.seller_evidence" class="text-sm">
+                  <span class="text-gray-600">卖家证据：</span>
+                  <p class="mt-1 text-gray-900">{{ arbitrationInfo.seller_evidence }}</p>
+                </div>
+                
+                <div class="text-sm">
+                  <span class="text-gray-600">仲裁状态：</span>
+                  <span :class="{
+                    'text-blue-600': arbitrationInfo.status === 'evidence_collection',
+                    'text-purple-600': arbitrationInfo.status === 'arbitrating',
+                    'text-green-600': arbitrationInfo.status === 'completed'
+                  }">
+                    {{ getArbitrationStatusText(arbitrationInfo.status) }}
+                  </span>
+                </div>
+                
+                <div v-if="arbitrationInfo.deadline && arbitrationInfo.status !== 'completed'" class="text-sm">
+                  <span class="text-gray-600">剩余时间：</span>
+                  <span class="font-mono text-red-600">{{ formatCountdown(arbitrationInfo.deadline) }}</span>
+                </div>
+                
+                <div v-if="arbitrationInfo.verdict" class="text-sm bg-white p-3 rounded mt-2">
+                  <span class="text-gray-600">裁决结果：</span>
+                  <span :class="arbitrationInfo.verdict === 'buyer_wins' ? 'text-green-600' : 'text-blue-600'" class="font-semibold">
+                    {{ arbitrationInfo.verdict === 'buyer_wins' ? '买家胜诉' : '卖家胜诉' }}
+                  </span>
+                  <p class="mt-1 text-gray-700">{{ arbitrationInfo.verdict_reason }}</p>
+                </div>
+              </div>
+              
+              <p v-else class="text-sm text-yellow-700">订单已冻结，等待仲裁委员会处理...</p>
             </div>
             
-            <button 
-              @click="handleRefund"
-              class="flex-1 py-3 bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700 transition-colors"
-            >
-              <i class="fa-solid fa-rotate-left mr-2"></i>
-              申请退款
-            </button>
+            <!-- Seller Evidence Submission (only for seller) -->
+            <div v-if="isSeller && (!arbitrationInfo || arbitrationInfo.status === 'evidence_collection')" class="mb-4">
+              <textarea
+                v-model="sellerEvidence"
+                placeholder="请输入您的证据和说明..."
+                class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                rows="4"
+              ></textarea>
+              <button 
+                @click="handleSubmitEvidence"
+                :disabled="!sellerEvidence"
+                class="mt-2 w-full py-3 bg-purple-600 text-white font-semibold rounded-lg hover:bg-purple-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                <i class="fa-solid fa-upload mr-2"></i>
+                提交证据
+              </button>
+            </div>
+          </template>
+          
+          <!-- Refund Requested Status: Seller needs to approve/reject -->
+          <template v-if="order.status === 'refund_requested'">
+            <div class="w-full bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+              <div class="flex items-center text-orange-800 mb-3">
+                <i class="fa-solid fa-clock mr-2"></i>
+                <span class="font-semibold">退款申请中</span>
+              </div>
+              
+              <div v-if="arbitrationInfo" class="space-y-3">
+                <div class="text-sm">
+                  <span class="text-gray-600">买家退款理由：</span>
+                  <p class="mt-1 text-gray-900">{{ arbitrationInfo.buyer_reason }}</p>
+                </div>
+                
+                <div v-if="arbitrationInfo.deadline" class="text-sm">
+                  <span class="text-gray-600">剩余响应时间：</span>
+                  <span class="font-mono text-red-600">{{ formatCountdown(arbitrationInfo.deadline) }}</span>
+                </div>
+                
+                <p class="text-sm text-orange-700 mt-2">
+                  <i class="fa-solid fa-info-circle mr-1"></i>
+                  如果 48 小时内未响应，系统将自动批准退款。
+                </p>
+              </div>
+            </div>
+            
+            <!-- Seller Approval Buttons -->
+            <div v-if="isSeller" class="grid grid-cols-2 gap-4 mb-4">
+              <button 
+                @click="handleApproveRefund"
+                class="py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-colors"
+              >
+                <i class="fa-solid fa-check mr-2"></i>
+                同意退款
+              </button>
+              
+              <button 
+                @click="handleRejectRefund"
+                class="py-3 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors"
+              >
+                <i class="fa-solid fa-times mr-2"></i>
+                拒绝退款（进入仲裁）
+              </button>
+            </div>
+            
+            <div v-else class="w-full text-center py-4 text-gray-600">
+              <i class="fa-solid fa-hourglass-half mr-2"></i>
+              等待卖家处理退款申请...
+            </div>
           </template>
         </div>
       </div>
@@ -211,12 +311,20 @@ import { ordersApi } from '@/services/api'
 const route = useRoute()
 const orderStore = useOrderStore()
 const order = ref(null)
+const arbitrationInfo = ref(null)
+const sellerEvidence = ref('')
+const isSeller = ref(false)
 
 onMounted(async () => {
   const txId = route.params.id
   try {
     const response = await ordersApi.getById(txId)
     const tx = response.data
+    
+    // Check if current user is the seller
+    const currentUser = JSON.parse(localStorage.getItem('user') || '{}')
+    isSeller.value = currentUser.address === tx.to_address
+    
     order.value = {
       id: tx.tx_id,
       amount: tx.amount,
@@ -235,11 +343,27 @@ onMounted(async () => {
       tu3Amount: tx.tu3_amount,
       settlementStatus: tx.settlement_status
     }
+    
+    // Load arbitration info if disputed or refund_requested
+    if (tx.status === 'disputed' || tx.status === 'refund_requested') {
+      await loadArbitrationInfo(txId)
+    }
   } catch (error) {
     console.error('Failed to load order:', error)
     alert('加载订单失败')
   }
 })
+
+const loadArbitrationInfo = async (txId) => {
+  try {
+    const response = await fetch(`http://localhost:3000/api/v1/arbitration/${txId}/status`)
+    if (response.ok) {
+      arbitrationInfo.value = await response.json()
+    }
+  } catch (error) {
+    console.error('Failed to load arbitration info:', error)
+  }
+}
 
 const formatDate = (dateString) => {
   const date = new Date(dateString)
@@ -261,9 +385,34 @@ const getStatusText = (status) => {
     paid: '已支付/待发货',
     shipped: '已发货/待收货',
     completed: '已完成',
-    refunded: '已退款'
+    refunded: '已退款',
+    disputed: '仲裁中'
   }
   return texts[status] || status
+}
+
+const getArbitrationStatusText = (status) => {
+  const texts = {
+    evidence_collection: '证据收集中',
+    arbitrating: '仲裁判定中',
+    completed: '已完成'
+  }
+  return texts[status] || status
+}
+
+const formatCountdown = (deadline) => {
+  if (!deadline) return '未知'
+  
+  const deadlineDate = new Date(deadline)
+  const now = new Date()
+  const diff = deadlineDate - now
+  
+  if (diff <= 0) return '已超时'
+  
+  const hours = Math.floor(diff / (1000 * 60 * 60))
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+  
+  return `${hours}小时${minutes}分钟`
 }
 
 const handleConfirmReceipt = async () => {
@@ -291,14 +440,144 @@ const handleDispute = async () => {
 
   try {
     const response = await ordersApi.dispute(order.value.id, { reason })
-    alert('仲裁申请成功！订单已冻结，等待仲裁处理。')
+    alert('仲裁申请成功！订单已冻结，卖家有 48 小时提交证据。')
     
     // Reload order to get updated status
     const reloadResponse = await ordersApi.getById(order.value.id)
     order.value.status = reloadResponse.data.status
+    
+    // Load arbitration info
+    await loadArbitrationInfo(order.value.id)
   } catch (error) {
     console.error('Failed to dispute:', error)
     alert('申请仲裁失败：' + (error.response?.data?.detail || error.message))
+  }
+}
+
+const handleRequestRefund = async () => {
+  const reason = prompt('请输入退款理由：')
+  if (!reason) return
+  
+  try {
+    const response = await fetch(`http://localhost:3000/api/v1/transactions/${order.value.id}/refund`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ reason })
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || '申请失败')
+    }
+    
+    alert('退款申请已提交！卖家有 48 小时响应。')
+    
+    // Reload order
+    const reloadResponse = await ordersApi.getById(order.value.id)
+    order.value.status = reloadResponse.data.status
+    
+    // Load arbitration info
+    await loadArbitrationInfo(order.value.id)
+  } catch (error) {
+    console.error('Failed to request refund:', error)
+    alert('申请退款失败：' + error.message)
+  }
+}
+
+const handleApproveRefund = async () => {
+  if (!confirm('确认同意退款？款项将立即退回买家账户。')) {
+    return
+  }
+  
+  try {
+    const response = await fetch(`http://localhost:3000/api/v1/refunds/${order.value.id}/approve`, {
+      method: 'POST'
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || '操作失败')
+    }
+    
+    alert('已同意退款，款项已退回买家账户。')
+    
+    // Reload order
+    const reloadResponse = await ordersApi.getById(order.value.id)
+    order.value.status = reloadResponse.data.status
+  } catch (error) {
+    console.error('Failed to approve refund:', error)
+    alert('操作失败：' + error.message)
+  }
+}
+
+const handleRejectRefund = async () => {
+  const reason = prompt('请输入拒绝退款的理由（将作为仲裁证据）：')
+  if (!reason) return
+  
+  if (!confirm('确认拒绝退款？订单将进入仲裁流程。')) {
+    return
+  }
+  
+  try {
+    const response = await fetch(`http://localhost:3000/api/v1/refunds/${order.value.id}/reject`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ reason })
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || '操作失败')
+    }
+    
+    alert('已拒绝退款，订单进入仲裁流程。')
+    
+    // Reload order
+    const reloadResponse = await ordersApi.getById(order.value.id)
+    order.value.status = reloadResponse.data.status
+    
+    // Load arbitration info
+    await loadArbitrationInfo(order.value.id)
+  } catch (error) {
+    console.error('Failed to reject refund:', error)
+    alert('操作失败：' + error.message)
+  }
+}
+
+const handleSubmitEvidence = async () => {
+  if (!sellerEvidence.value.trim()) {
+    alert('请输入证据内容')
+    return
+  }
+  
+  try {
+    const response = await fetch(`http://localhost:3000/api/v1/arbitration/${order.value.id}/seller-evidence`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        evidence: sellerEvidence.value
+      })
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || '提交失败')
+    }
+    
+    alert('证据提交成功！系统将在 48 小时后自动裁决。')
+    sellerEvidence.value = ''
+    
+    // Reload arbitration info
+    await loadArbitrationInfo(order.value.id)
+  } catch (error) {
+    console.error('Failed to submit evidence:', error)
+    alert('提交证据失败：' + error.message)
   }
 }
 
