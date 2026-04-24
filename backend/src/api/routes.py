@@ -105,6 +105,10 @@ class TransactionResponse(BaseModel):
     tu3_address: Optional[str] = None
     tu3_amount: Optional[float] = 0
     settlement_status: Optional[str] = None
+    # X402 Integration fields
+    x402_escrow_id: Optional[str] = None
+    x402_escrow_address: Optional[str] = None
+    x402_status: Optional[str] = None
 
 class TransactionVerify(BaseModel):
     public_key: str
@@ -144,19 +148,21 @@ async def create_new_transaction(transaction: TransactionCreate) -> TransactionR
     # Generate a unique transaction ID
     tx_id = str(uuid.uuid4())
     
-    # Deduct payment from buyer's AI wallet (Atomic Operation)
-    async with aiosqlite.connect(DB_PATH) as db:
-        result = await db.execute(
-            'UPDATE ai_wallets SET balance = balance - ? WHERE address = ? AND balance >= ?',
-            (transaction.amount, transaction.from_address, transaction.amount)
+    # [X402 Integration] Initiate Escrow Payment (No Registration Mode)
+    # Instead of deducting from local balance, we lock funds via X402 Relay Network.
+    try:
+        from src.x402.bridge import x402_bridge
+        escrow_result = await x402_bridge.initiate_escrow(
+            sender=transaction.from_address,
+            receiver=transaction.to_address,
+            amount=transaction.amount,
+            asset=transaction.currency
         )
-        await db.commit()
-        
-        if result.rowcount == 0:
-            raise HTTPException(status_code=400, detail="Insufficient balance or wallet not found")
-        print(f"[Payment] Deducted {transaction.amount} from AI wallet {transaction.from_address}")
+        print(f"[X402] Escrow initiated: {escrow_result.escrow_id}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"X402 Escrow failed: {str(e)}")
     
-    # Create transaction data with status 'paid'
+    # Create transaction data with status 'paid' and X402 details
     tx_data = {
         "tx_id": tx_id,
         "from_address": transaction.from_address,
@@ -166,7 +172,10 @@ async def create_new_transaction(transaction: TransactionCreate) -> TransactionR
         "contract_hash": transaction.contract_hash,
         "file_hash": transaction.file_hash,
         "status": "paid",  # Changed from 'pending' to 'paid'
-        "referrer_address": transaction.referrer_address
+        "referrer_address": transaction.referrer_address,
+        "x402_escrow_id": escrow_result.escrow_id,
+        "x402_escrow_address": escrow_result.escrow_address,
+        "x402_status": escrow_result.status
     }
     
     # For demo purposes, use a dummy private key
@@ -1612,9 +1621,9 @@ async def user_verify_email(data: Dict[str, Any]) -> Dict[str, Any]:
         ai_sub_wallet = tron_service.generate_sub_wallet()
         ai_address = ai_sub_wallet['address']
         
-        # Store both addresses in users table
+        # Store addresses in users table
         await db.execute('''
-            UPDATE users SET address = ?, ai_address = ?, human_balance = 0.0, ai_balance = 0.0
+            UPDATE users SET address = ?, ai_address = ?
             WHERE email = ?
         ''', (human_address, ai_address, email))
         

@@ -1,4 +1,4 @@
-# Black2 Clearing Protocol - Python Dependencies
+# Black2 Backend Dependencies
 
 # Web Framework
 fastapi==0.115.0
@@ -18,3 +18,6 @@ httpx==0.27.2
 # Utilities
 python-dotenv==1.0.1
 pydantic==2.9.2
+
+# X402 Protocol Integration
+uvd-x402-sdk>=0.1.0
