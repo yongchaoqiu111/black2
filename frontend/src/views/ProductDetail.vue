@@ -353,7 +353,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useCartStore } from '@/stores/cart'
 import { useOrderStore } from '@/stores/orders'
@@ -507,7 +507,15 @@ const handleBuyNow = async () => {
     const response = await ordersApi.create(orderData)
     console.log('Order created:', response.data)
     
-    alert('订单创建成功！订单号：' + response.data.tx_id)
+    // X402 Integration: Show Escrow Details
+    const escrowId = response.data.x402_escrow_id
+    const escrowAddress = response.data.x402_escrow_address
+    
+    if (escrowId && escrowAddress) {
+      alert(`订单创建成功！\n\nX402 托管 ID: ${escrowId}\n托管地址: ${escrowAddress}\n\n请使用您的钱包向该地址支付 ${product.value.price} USDT`)
+    } else {
+      alert('订单创建成功！订单号：' + response.data.tx_id)
+    }
     
     // Refresh order list
     await orderStore.loadOrders()
