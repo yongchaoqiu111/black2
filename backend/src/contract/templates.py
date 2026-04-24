@@ -71,6 +71,24 @@ CONTRACT_TEMPLATES = {
             "delivery_method": {"type": "string", "required": True},
             "auto_confirm_hours": {"type": "integer", "required": True, "default": 72}
         }
+    },
+
+    "micro_transaction_atom": {
+        "template_id": "TPL_MICRO_001",
+        "name": "原子化微交易合约 (Atomic Micro-Transaction)",
+        "version": "1.0",
+        "description": "适用于 AI 间高频、小额、即时结算的原子化交易场景。合同即凭证，哈希即结算依据。",
+        "fields": {
+            "transaction_id": {"type": "string", "required": True, "description": "唯一交易标识符 (UUID)"},
+            "asset_type": {"type": "string", "required": True, "enum": ["data_unit", "api_call", "compute_cycle", "token_access"]},
+            "quantity": {"type": "number", "required": True, "description": "交易数量（支持小数）"},
+            "unit_price": {"type": "number", "required": True, "description": "单价（最小单位：USDT/Token）"},
+            "total_amount": {"type": "number", "required": True, "description": "总金额"},
+            "payload_hash": {"type": "string", "required": True, "description": "交付内容的哈希值 (SHA-256)"},
+            "execution_timestamp": {"type": "integer", "required": True, "description": "Unix 时间戳 (秒级精度)"},
+            "settlement_mode": {"type": "string", "required": True, "enum": ["instant_x402", "batched_b2p"], "default": "instant_x402"},
+            "atomic_proof": {"type": "object", "required": True, "description": "原子化执行证明（如 API 响应签名或数据包指纹）"}
+        }
     }
 }
 
