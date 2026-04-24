@@ -1,0 +1,13 @@
+{
+  "type": "batch_anchor",
+  "batch_id": "BATCH_1777063477",
+  "timestamp": "2026-04-24T20:44:37.552237+00:00",
+  "merkle_root": "7dd4e84daa35b30455a0d3e42ae211adedd9617d45cd80800b630f1db01b02d6",
+  "transaction_count": 2,
+  "transaction_hashes": [
+    "3f6a36983443b9252950f990f308076af376efca673e675b00ce6c9036610399",
+    "a6e5c0c39f5386a258bb84a769471b0a3e97c18df3b5283b2fcb22f9dea8137f"
+  ],
+  "protocol_version": "1.0",
+  "metadata": {}
+}
