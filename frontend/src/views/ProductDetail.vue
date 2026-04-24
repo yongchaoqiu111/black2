@@ -20,13 +20,13 @@
               <!-- Image Carousel -->
               <div v-if="!showVideo" class="relative h-full">
                 <img 
-                  :src="product.images[currentImageIndex]" 
+                  :src="product.images && product.images[currentImageIndex] ? product.images[currentImageIndex] : ''" 
                   class="w-full h-full object-cover"
                 />
                 
                 <!-- Navigation Arrows -->
                 <button 
-                  v-if="product.images.length > 1"
+                  v-if="product.images && product.images.length > 1"
                   @click="prevImage"
                   class="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/90 rounded-full flex items-center justify-center hover:bg-white transition-colors shadow-md"
                 >
@@ -35,7 +35,7 @@
                   </svg>
                 </button>
                 <button 
-                  v-if="product.images.length > 1"
+                  v-if="product.images && product.images.length > 1"
                   @click="nextImage"
                   class="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/90 rounded-full flex items-center justify-center hover:bg-white transition-colors shadow-md"
                 >
@@ -46,7 +46,7 @@
 
                 <!-- Image Counter -->
                 <div class="absolute bottom-3 right-3 bg-black/60 text-white px-3 py-1 rounded-full text-sm">
-                  {{ currentImageIndex + 1 }} / {{ product.images.length }}
+                  {{ currentImageIndex + 1 }} / {{ (product.images || []).length }}
                 </div>
               </div>
 
@@ -92,7 +92,7 @@
 
               <!-- Image Thumbnails -->
               <div 
-                v-for="(img, index) in product.images" 
+                v-for="(img, index) in (product.images || [])" 
                 :key="index"
                 @click="selectImage(index)"
                 :class="[
@@ -156,6 +156,20 @@
                   <p class="text-xs text-gray-600">Reviews</p>
                 </div>
               </div>
+              
+              <!-- Seller Risk Level (B2P Protocol) -->
+              <div v-if="sellerRiskLevel" class="mt-4 pt-4 border-t border-gray-200">
+                <div class="flex items-center justify-between">
+                  <span class="text-sm font-medium text-gray-700">交易风险:</span>
+                  <span 
+                    :class="getRiskColor(sellerRiskLevel.level)" 
+                    class="px-3 py-1 rounded-full text-xs font-bold uppercase"
+                  >
+                    {{ sellerRiskLevel.level.replace('_', ' ') }}
+                  </span>
+                </div>
+                <p class="text-xs text-gray-500 mt-1">基于 B2P 协议的信誉评估</p>
+              </div>
             </div>
 
             <!-- Action Buttons -->
@@ -206,7 +220,7 @@
               <h3 class="text-sm font-semibold text-gray-900 mb-2">TEXT:</h3>
               <div class="flex flex-wrap gap-2">
                 <span 
-                  v-for="tag in product.tags" 
+                  v-for="tag in (product.tags || [])" 
                   :key="tag"
                   class="px-3 py-1 bg-gray-100 text-gray-700 text-sm rounded hover:bg-gray-200 cursor-pointer transition-colors"
                 >
@@ -246,7 +260,7 @@
             
             <h4 class="text-lg font-semibold text-gray-900 mb-3">Features</h4>
             <ul class="list-disc list-inside space-y-2 text-gray-600 mb-6">
-              <li v-for="feature in product.features" :key="feature">{{ feature }}</li>
+              <li v-for="feature in (product.features || [])" :key="feature">{{ feature }}</li>
             </ul>
 
             <h4 class="text-lg font-semibold text-gray-900 mb-3">Specifications</h4>
@@ -339,135 +353,163 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useCartStore } from '@/stores/cart'
 import { useOrderStore } from '@/stores/orders'
 import { ordersApi } from '@/services/api'
 import { useUserStore } from '@/stores/user'
-// Navbar is now in Layout component
+import { useProductStore } from '@/stores/product'
+import { useProductDetail, tabs, transactionSteps, antiFraudTips } from '@/composables/useProductDetail'
 
 const route = useRoute()
 const router = useRouter()
 const cartStore = useCartStore()
 const orderStore = useOrderStore()
 const userStore = useUserStore()
-const showVideo = ref(false)
-const currentImageIndex = ref(0)
-const isFollowing = ref(false)
-const isFavorited = ref(false)
-const showContactModal = ref(false)
-const message = ref('')
-const activeTab = ref('description')
+const productStore = useProductStore()
 
-const tabs = [
-  { id: 'description', label: 'Product Description' },
-  { id: 'process', label: 'Transaction Process' },
-  { id: 'safety', label: 'Safety Tips' }
-]
+const sellerRiskLevel = ref(null)
 
-const transactionSteps = [
-  { title: 'Browse & Select', desc: 'Browse products and select the item you want to purchase' },
-  { title: 'Contact Seller', desc: 'Contact the seller to confirm product details and availability' },
-  { title: 'Make Payment', desc: 'Complete payment through our secure payment system' },
-  { title: 'Receive Product', desc: 'Seller delivers the product, verify and confirm receipt' },
-  { title: 'Leave Review', desc: 'Share your experience and rate the product' }
-]
+// Use composable for UI state and logic
+const {
+  showVideo,
+  currentImageIndex,
+  isFollowing,
+  isFavorited,
+  showContactModal,
+  message,
+  activeTab,
+  selectImage,
+  handleFollow,
+  handleFavorite
+} = useProductDetail()
 
-const antiFraudTips = [
-  'Always communicate through the platform to keep records of all conversations',
-  'Never share your password or payment verification codes with anyone',
-  'Verify the seller\'s reputation and reviews before making a purchase',
-  'Use only the official payment methods provided by the platform',
-  'Be cautious of deals that seem too good to be true',
-  'Report any suspicious activity to our support team immediately',
-  'Keep all transaction records and screenshots for future reference',
-  'Do not click on external links sent by sellers outside the platform'
-]
-
-const product = ref({
-  id: route.params.id,
-  name: 'Premium Marketing Automation Suite - Professional Edition',
-  description: 'A comprehensive marketing automation platform designed for modern businesses. This powerful tool helps you streamline your marketing workflows, automate customer engagement, manage campaigns across multiple channels, and drive revenue growth.',
-  price: 299,
-  originalPrice: 499,
-  seller: 'Marketing Pro Studio',
-  sellerAddress: 'TN8qJz7K3V9pL2xR5wM4nB6cY1dF3gH8jK', // Mock seller address
-  fileHash: null,
-  video: 'https://www.w3schools.com/html/mov_bbb.mp4',
-  images: [
-    'https://via.placeholder.com/1200x800?text=Product+Image+1',
-    'https://via.placeholder.com/1200x800?text=Product+Image+2',
-    'https://via.placeholder.com/1200x800?text=Product+Image+3',
-    'https://via.placeholder.com/1200x800?text=Product+Image+4',
-    'https://via.placeholder.com/1200x800?text=Product+Image+5'
-  ],
-  features: [
-    'Automated email campaign management with A/B testing',
-    'Social media scheduling and analytics dashboard',
-    'Advanced CRM integration with lead scoring',
-    'Real-time performance tracking and reporting',
-    'Multi-channel campaign orchestration',
-    'Custom workflow automation builder'
-  ],
-  specs: {
-    'Version': '3.5.2',
-    'License': 'Lifetime',
-    'Platform': 'Web-based',
-    'Support': 'Email & Chat',
-    'Updates': 'Free for 1 year',
-    'Users': 'Unlimited'
-  },
-  sales: 1234,
-  rating: 4.9,
-  reviews: 328,
-  tags: ['Marketing', 'Automation', 'SaaS', 'Business', 'CRM']
+// Use data from Store
+const product = computed(() => {
+  const p = productStore.currentProduct || {}
+  return {
+    id: p.product_id,
+    product_id: p.product_id,
+    name: p.name || '加载中...',
+    description: p.description || '',
+    price: p.price || 0,
+    originalPrice: p.original_price,
+    seller: p.seller_address || '未知卖家',
+    sellerAddress: p.seller_address,
+    fileHash: p.file_hash,
+    video: p.video_url || '',
+    images: p.images ? (Array.isArray(p.images) ? p.images : [p.images]) : [],
+    features: p.features || [],
+    sales: p.sales_count || 0,
+    rating: p.rating || 5.0,
+    reviews: p.review_count || 0,
+    tags: p.tags || []
+  }
 })
 
-const selectImage = (index) => {
-  currentImageIndex.value = index
-  showVideo.value = false
-}
-
+// Implement image navigation with access to product data
 const nextImage = () => {
-  currentImageIndex.value = (currentImageIndex.value + 1) % product.value.images.length
+  if (product.value.images.length > 0) {
+    currentImageIndex.value = (currentImageIndex.value + 1) % product.value.images.length
+  }
 }
 
 const prevImage = () => {
-  currentImageIndex.value = currentImageIndex.value === 0 ? product.value.images.length - 1 : currentImageIndex.value - 1
+  if (product.value.images.length > 0) {
+    currentImageIndex.value = currentImageIndex.value === 0 ? product.value.images.length - 1 : currentImageIndex.value - 1
+  }
 }
 
-const handleFollow = () => { isFollowing.value = !isFollowing.value }
-const handleFavorite = () => { isFavorited.value = !isFavorited.value }
+// Load product details if not in Store
+onMounted(async () => {
+  // Priority 1: Use data already in Store (passed from Shop.vue)
+  if (productStore.currentProduct) {
+    console.log('Using cached product from Store:', productStore.currentProduct.name)
+    await fetchSellerRisk(productStore.currentProduct.seller_address)
+    return
+  }
+
+  // Priority 2: Fallback to API if Store is empty (e.g., direct refresh)
+  const productId = route.params.id
+  if (productId && productId !== 'undefined') {
+    console.log('Fetching product from API:', productId)
+    await productStore.getProductById(productId)
+    if (productStore.currentProduct) {
+      await fetchSellerRisk(productStore.currentProduct.seller_address)
+    }
+  } else {
+    console.error('No product ID found in route or Store')
+  }
+})
+
+async function fetchSellerRisk(sellerAddress) {
+  if (!sellerAddress) return
+  try {
+    const response = await fetch(`/api/v1/reputation/${sellerAddress}`)
+    const data = await response.json()
+    sellerRiskLevel.value = {
+      level: data.risk_level || 'normal',
+      friction_index: data.friction_index
+    }
+  } catch (e) {
+    console.error('Failed to fetch seller risk:', e)
+  }
+}
+
+function getRiskColor(level) {
+  switch (level) {
+    case 'low': return 'bg-green-100 text-green-800'
+    case 'medium': return 'bg-yellow-100 text-yellow-800'
+    case 'high': return 'bg-red-100 text-red-800'
+    default: return 'bg-gray-100 text-gray-800'
+  }
+}
+
 const handleBuyNow = async () => {
-  // 检查是否登录
+  // Check if logged in
   if (!userStore.user?.address) {
     alert('请先登录')
     router.push('/login')
     return
   }
 
+  // MUST use AI Wallet Address for transaction settlement
+  const buyerAiAddress = userStore.aiWalletAddress || userStore.user?.ai_wallet_address
+  if (!buyerAiAddress) {
+    alert('系统错误：未检测到您的 AI 钱包地址，请尝试重新登录以同步钱包信息。')
+    console.error('AI Wallet Address missing. User:', userStore.user)
+    return
+  }
+
+  // Validate Seller Address
+  const sellerAddress = product.value.sellerAddress || product.value.seller_address
+  if (!sellerAddress) {
+    alert('商品信息错误：缺少卖家地址，无法创建订单。')
+    return
+  }
+
   try {
-    // 生成一个随机的 contract_hash（模拟合同约定）
+    // Generate a random contract_hash (mock)
     const contractHash = Array.from({length: 64}, () => Math.floor(Math.random() * 16).toString(16)).join('')
     
-    // Create order - use AI wallet address for payment
+    // Create order - strictly use AI wallet address
     const orderData = {
-      from_address: userStore.aiWalletAddress || userStore.user?.ai_wallet_address,
-      to_address: product.value.sellerAddress || 'UNKNOWN',
-      amount: product.value.price,
+      from_address: buyerAiAddress, // AI Wallet for payment
+      to_address: sellerAddress,
+      amount: Number(product.value.price),
       currency: 'USDT',
       contract_hash: contractHash,
       file_hash: null
     }
     
-    console.log('Creating order:', orderData)
+    console.log('[Order] Submitting transaction:', orderData)
     const response = await ordersApi.create(orderData)
     console.log('Order created:', response.data)
     
     alert('订单创建成功！订单号：' + response.data.tx_id)
     
-    // 刷新订单列表
+    // Refresh order list
     await orderStore.loadOrders()
     
     router.push('/orders')
