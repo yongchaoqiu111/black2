@@ -42,7 +42,9 @@ from src.db.transaction_db import (
     update_contract_status,
     get_contract,
     apply_transaction_reputation_update,
-    get_user_reputation
+    get_user_reputation,
+    get_user_reputation_snapshot,
+    update_reputation_cache_batch
 )
 from src.db.transaction_db import DB_PATH
 from src.crypto.hash_service import sign_transaction, verify_transaction, sha256_hash, generate_keypair, sign_message, verify_signature
@@ -927,22 +929,10 @@ async def update_transaction_status_endpoint(tx_id: str, update: TransactionStat
 @router.get("/api/v1/reputation/{address}")
 async def get_reputation(address: str) -> Dict[str, Any]:
     """
-    Get user's reputation score and margin percentage.
-    
-    Returns current reputation, margin percentage, and publishing eligibility.
+    Get user's reputation snapshot (O(1) Cache Read).
+    Optimized for high-frequency micro-transactions.
     """
-    rep = await get_user_reputation(address)
-    
-    if not rep:
-        # Return default values for new users
-        return {
-            "address": address,
-            "reputation_score": 100,
-            "margin_percentage": 5.0,
-            "can_publish": True,
-            "message": "New user with default reputation"
-        }
-    
+    rep = await get_user_reputation_snapshot(address)
     return rep
 
 
