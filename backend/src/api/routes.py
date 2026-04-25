@@ -44,7 +44,10 @@ from src.db.transaction_db import (
     apply_transaction_reputation_update,
     get_user_reputation,
     get_user_reputation_snapshot,
-    update_reputation_cache_batch
+    update_reputation_cache_batch,
+    inject_arbitration_fund,
+    get_arbitration_fund_balance,
+    record_fund_release
 )
 from src.db.transaction_db import DB_PATH
 from src.crypto.hash_service import sign_transaction, verify_transaction, sha256_hash, generate_keypair, sign_message, verify_signature
@@ -313,6 +316,52 @@ async def complete_transaction(tx_id: str) -> Dict[str, Any]:
     
     # Update transaction status
     await update_transaction_status(tx_id, 'completed')
+    
+    # Execute fund release via X402
+    try:
+        from src.x402.bridge import x402_bridge
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Get transaction details
+            cursor = await db.execute(
+                'SELECT tx_id, from_address, to_address, amount, x402_escrow_id FROM transactions WHERE tx_id = ?',
+                (tx_id,)
+            )
+            tx = await cursor.fetchone()
+            
+            if tx and tx[4]:  # x402_escrow_id exists
+                escrow_id = tx[4]
+                seller_address = tx[2]
+                amount = tx[3]
+                
+                # Calculate platform fee (5%)
+                platform_fee = await x402_bridge.calculate_platform_fee(amount)
+                
+                # Release funds to seller
+                release_result = await x402_bridge.release_funds(
+                    escrow_id=escrow_id,
+                    recipient=seller_address,
+                    amount=amount,
+                    verdict='completed',
+                    platform_fee=platform_fee,
+                    arbitration_fee=0.0
+                )
+                
+                # Record fund release for audit
+                if release_result.success:
+                    await record_fund_release(
+                        tx_id=tx_id,
+                        escrow_id=escrow_id,
+                        recipient=seller_address,
+                        amount=release_result.amount,
+                        platform_fee=platform_fee,
+                        arbitration_fee=0.0,
+                        verdict='completed',
+                        tx_hash=release_result.tx_hash
+                    )
+                    print(f"[X402] Funds released for {tx_id}: {release_result.message}")
+    except Exception as e:
+        print(f"[X402] Fund release error: {e}")
     
     # Log this status change asynchronously
     try:
@@ -934,6 +983,16 @@ async def get_reputation(address: str) -> Dict[str, Any]:
     """
     rep = await get_user_reputation_snapshot(address)
     return rep
+
+
+@router.get("/api/v1/arbitration/fund-pool")
+async def get_arbitration_fund() -> Dict[str, Any]:
+    """
+    Get current arbitration fund pool balance and statistics.
+    
+    Returns total balance, injection count, and recent transactions.
+    """
+    return await get_arbitration_fund_balance()
 
 
 @router.get("/api/v1/wallet/{address}", response_model=WalletResponse)
