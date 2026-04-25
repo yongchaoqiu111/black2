@@ -225,6 +225,23 @@ async def init_db():
             )
         ''')
         
+        # Create fund_releases table (audit trail for fund releases)
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS fund_releases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_id TEXT NOT NULL,
+                escrow_id TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                amount REAL NOT NULL,
+                platform_fee REAL DEFAULT 0.0,
+                arbitration_fee REAL DEFAULT 0.0,
+                verdict TEXT NOT NULL,
+                tx_hash TEXT NOT NULL,
+                released_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (tx_id) REFERENCES transactions(tx_id)
+            )
+        ''')
+        
         # Create users table (for reputation system)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -1711,3 +1728,112 @@ async def apply_transaction_reputation_update(
                     score_change=-5,
                     reason=f"Voluntary refund for transaction {tx_id}"
                 )
+
+
+async def inject_arbitration_fund(
+    amount: float,
+    source_tx_id: str,
+    reason: str
+) -> bool:
+    """
+    Inject penalty/funds into arbitration fund pool.
+    
+    Args:
+        amount: Amount to inject
+        source_tx_id: Source transaction ID
+        reason: Reason for injection
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                'INSERT INTO arbitration_fund_pool (amount, source_tx_id, reason) VALUES (?, ?, ?)',
+                (amount, source_tx_id, reason)
+            )
+            await db.commit()
+            print(f"[ArbFund] Injected {amount} from tx {source_tx_id}: {reason}")
+            return True
+    except Exception as e:
+        print(f"[ArbFund] Error injecting fund: {e}")
+        return False
+
+
+async def get_arbitration_fund_balance() -> Dict[str, Any]:
+    """
+    Get current arbitration fund pool balance and statistics.
+    
+    Returns:
+        Dict with balance and stats
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Total balance
+        cursor = await db.execute('SELECT SUM(amount) FROM arbitration_fund_pool')
+        row = await cursor.fetchone()
+        total_balance = row[0] if row[0] else 0.0
+        
+        # Transaction count
+        cursor = await db.execute('SELECT COUNT(*) FROM arbitration_fund_pool')
+        row = await cursor.fetchone()
+        total_count = row[0] if row[0] else 0
+        
+        # Recent injections (last 10)
+        cursor = await db.execute(
+            'SELECT amount, source_tx_id, reason, created_at FROM arbitration_fund_pool ORDER BY created_at DESC LIMIT 10'
+        )
+        recent = []
+        async for row in cursor:
+            recent.append({
+                "amount": row[0],
+                "source_tx_id": row[1],
+                "reason": row[2],
+                "created_at": row[3]
+            })
+        
+        return {
+            "total_balance": total_balance,
+            "total_injections": total_count,
+            "recent_injections": recent
+        }
+
+
+async def record_fund_release(
+    tx_id: str,
+    escrow_id: str,
+    recipient: str,
+    amount: float,
+    platform_fee: float,
+    arbitration_fee: float,
+    verdict: str,
+    tx_hash: str
+) -> bool:
+    """
+    Record fund release to database for audit trail.
+    
+    Args:
+        tx_id: Transaction ID
+        escrow_id: X402 escrow ID
+        recipient: Recipient address
+        amount: Net amount released
+        platform_fee: Platform fee deducted
+        arbitration_fee: Arbitration fee deducted
+        verdict: Verdict type
+        tx_hash: Blockchain transaction hash
+        
+    Returns:
+        True if successful
+    """
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute('''
+                INSERT INTO fund_releases 
+                (tx_id, escrow_id, recipient, amount, platform_fee, arbitration_fee, verdict, tx_hash, released_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (tx_id, escrow_id, recipient, amount, platform_fee, arbitration_fee, verdict, tx_hash))
+            await db.commit()
+            print(f"[FundRelease] Recorded: {tx_id} -> {recipient} ({amount})")
+            return True
+    except Exception as e:
+        print(f"[FundRelease] Error recording: {e}")
+        return False
