@@ -274,6 +274,17 @@ async def init_db():
             )
         ''')
         
+        # Create reputation_cache table (for pre-computed snapshots)
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS reputation_cache (
+                address TEXT PRIMARY KEY,
+                completion_rate REAL DEFAULT 1.0,
+                friction_index REAL DEFAULT 0.0,
+                risk_level TEXT DEFAULT 'low',
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         # Database migration: add missing columns to existing tables
         # Check and add delivery_url column to products table
         try:
@@ -1318,7 +1329,7 @@ async def update_reputation_score(
     reason: str = ""
 ) -> Dict[str, Any]:
     """
-    Update user's reputation score.
+    Update user's reputation score with atomic behavior offset logic.
     
     Args:
         address: User wallet address
@@ -1331,7 +1342,7 @@ async def update_reputation_score(
     async with aiosqlite.connect(DB_PATH) as db:
         # Get current reputation
         cursor = await db.execute(
-            'SELECT reputation_score FROM users WHERE address = ?',
+            'SELECT reputation_score, successful_streak FROM users WHERE address = ?',
             (address,)
         )
         row = await cursor.fetchone()
@@ -1339,20 +1350,28 @@ async def update_reputation_score(
         if not row:
             # Create user if not exists
             current_score = 100
+            streak = 0
             await db.execute(
-                'INSERT INTO users (address, reputation_score) VALUES (?, ?)',
-                (address, current_score)
+                'INSERT INTO users (address, reputation_score, successful_streak) VALUES (?, ?, ?)',
+                (address, current_score, streak)
             )
         else:
-            current_score = row[0]
+            current_score, streak = row
+        
+        # Apply Behavior Offset: If positive change, boost streak; if negative, reset streak
+        new_streak = streak
+        if score_change > 0:
+            new_streak += 1
+        elif score_change < 0:
+            new_streak = 0
         
         # Calculate new score (clamp between 0-100)
         new_score = max(0, min(100, current_score + score_change))
         
-        # Update score
+        # Update score and streak
         await db.execute(
-            'UPDATE users SET reputation_score = ?, updated_at = CURRENT_TIMESTAMP WHERE address = ?',
-            (new_score, address)
+            'UPDATE users SET reputation_score = ?, successful_streak = ?, updated_at = CURRENT_TIMESTAMP WHERE address = ?',
+            (new_score, new_streak, address)
         )
         
         # Record reputation history
@@ -1369,6 +1388,7 @@ async def update_reputation_score(
             "previous_score": current_score,
             "score_change": score_change,
             "new_score": new_score,
+            "new_streak": new_streak,
             "reason": reason
         }
 
@@ -1514,20 +1534,105 @@ async def execute_arbitration_verdict(tx_id: str, verdict: str, seller_address: 
     }
 
 
-async def get_user_reputation(address: str) -> Optional[Dict[str, Any]]:
+async def get_user_reputation_snapshot(address: str) -> Optional[Dict[str, Any]]:
     """
-    Get user's current reputation info including friction index.
-    Implements Time Decay and Behavioral Offset logic (B2P Standard).
-    
-    Args:
-        address: User wallet address
-        
-    Returns:
-        User reputation data or None
+    O(1) Cache read for micro-transactions.
+    Returns pre-computed reputation snapshot from reputation_cache table.
     """
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            'SELECT address, reputation_score, dispute_count, purchase_count, sales_count, last_dispute_at, successful_streak, reputation_stake FROM users WHERE address = ?',
+            'SELECT * FROM reputation_cache WHERE address = ?',
+            (address,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            # Return default snapshot for new users
+            return {
+                "address": address,
+                "completion_rate": 1.0,
+                "friction_index": 0.0,
+                "risk_level": "low",
+                "last_updated": None
+            }
+        
+        columns = [description[0] for description in cursor.description]
+        return dict(zip(columns, row))
+
+async def update_reputation_cache_batch():
+    """
+    B2P-Indexer logic: Batch calculate and update reputation snapshots.
+    Implements Time Decay + Completion Rate model.
+    """
+    import time
+    now = time.time()
+    window_7d = now - (7 * 24 * 3600)
+    window_30d = now - (30 * 24 * 3600)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Get all active addresses from transactions in the last 30 days
+        cursor = await db.execute('''
+            SELECT DISTINCT buyer_address as address FROM transactions WHERE timestamp > ?
+            UNION
+            SELECT DISTINCT seller_address as address FROM transactions WHERE timestamp > ?
+        ''', (window_30d, window_30d))
+        
+        rows = await cursor.fetchall()
+        addresses = [row[0] for row in rows if row[0]]
+
+        for addr in addresses:
+            # Calculate stats for this address (as seller)
+            total_cursor = await db.execute(
+                'SELECT COUNT(*) FROM transactions WHERE to_address = ? AND timestamp > ?',
+                (addr, window_30d)
+            )
+            total_count = (await total_cursor.fetchone())[0]
+            
+            success_cursor = await db.execute(
+                'SELECT COUNT(*) FROM transactions WHERE to_address = ? AND status = ? AND timestamp > ?',
+                (addr, 'completed', window_30d)
+            )
+            success_count = (await success_cursor.fetchone())[0]
+            
+            dispute_cursor = await db.execute(
+                'SELECT COUNT(*) FROM arbitration_records WHERE seller_address = ? AND created_at > ?',
+                (addr, window_30d)
+            )
+            dispute_count = (await dispute_cursor.fetchone())[0]
+
+            if total_count == 0:
+                continue
+
+            # 1. Completion Rate
+            completion_rate = success_count / total_count
+            
+            # 2. Friction Index (Simplified: disputes / total)
+            friction_index = dispute_count / total_count
+            
+            # 3. Risk Level
+            risk_level = "low"
+            if friction_index > 0.15:
+                risk_level = "high"
+            elif friction_index > 0.05:
+                risk_level = "medium"
+
+            # Upsert into cache
+            await db.execute('''
+                INSERT OR REPLACE INTO reputation_cache 
+                (address, completion_rate, friction_index, risk_level, last_updated)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (addr, round(completion_rate, 4), round(friction_index, 4), risk_level, datetime.datetime.now().isoformat()))
+        
+        await db.commit()
+
+async def get_user_reputation(address: str) -> Optional[Dict[str, Any]]:
+    """
+    Get user's current reputation info (Legacy/Full view).
+    For micro-transactions, prefer using get_user_reputation_snapshot().
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'SELECT address, reputation_score, dispute_count, purchase_count, sales_count FROM users WHERE address = ?',
             (address,)
         )
         row = await cursor.fetchone()
@@ -1538,29 +1643,7 @@ async def get_user_reputation(address: str) -> Optional[Dict[str, Any]]:
         columns = [description[0] for description in cursor.description]
         user_data = dict(zip(columns, row))
         
-        # 1. Time Decay Logic
-        effective_disputes = user_data.get('dispute_count', 0)
-        last_dispute_str = user_data.get('last_dispute_at')
-        if last_dispute_str:
-            from datetime import datetime
-            last_dispute = datetime.fromisoformat(last_dispute_str)
-            days_since = (datetime.now() - last_dispute).days
-            if days_since > 90:
-                effective_disputes = max(0, effective_disputes * 0.5)
-        
-        # 2. Calculate Transaction Friction Index
-        total_tx = (user_data.get('purchase_count', 0) + user_data.get('sales_count', 0))
-        friction_index = (effective_disputes / total_tx * 100) if total_tx > 0 else 0
-        
-        # 3. Behavioral Offset
-        streak = user_data.get('successful_streak', 0)
-        if streak >= 10:
-            friction_index = max(0, friction_index - (streak // 10))
-        
-        user_data['friction_index'] = round(friction_index, 2)
-        user_data['risk_level'] = "low" if friction_index < 5 else ("medium" if friction_index < 15 else "high")
-        
-        # Calculate margin percentage
+        # Calculate margin percentage based on legacy score
         margin_pct = await calculate_margin_percentage(user_data['reputation_score'])
         user_data['margin_percentage'] = margin_pct
         user_data['can_publish'] = user_data['reputation_score'] >= 60
