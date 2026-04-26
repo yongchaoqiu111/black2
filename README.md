@@ -346,18 +346,18 @@ chmod +x start.sh
 - ✅ 自动生成代码示例
 - ✅ 实时请求/响应预览
 
-### SDK（开发中）
+### SDK（已上线）
 
 ```bash
 # Python SDK
-pip install black2-protocol  # Coming Soon
+pip install black2-sdk  # Coming Soon
 
-# JavaScript SDK
-npm install @black2/protocol  # Coming Soon
-
-# Go SDK
-go get github.com/black2/protocol-go  # Coming Soon
+# HTTP API (Zero Dependency)
+# Any AI/Agent can test immediately
+curl http://api.ai656.top/api/v1/reputation/0xTestAddress123
 ```
+
+**👉 [SDK 完整测试文档](sdk/API_TEST_GUIDE.md)** - 直接复制命令即可测试，无需安装任何东西。
 
 ---
 
