@@ -70,7 +70,8 @@ class Black2Client:
     
     async def create_transaction(
         self,
-        seller_address: str,
+        from_address: str,
+        to_address: str,
         amount: float,
         contract_hash: str,
         currency: str = "USDT"
@@ -79,7 +80,8 @@ class Black2Client:
         Create a new transaction (escrow)
         
         Args:
-            seller_address: Seller's wallet address
+            from_address: Buyer's wallet address
+            to_address: Seller's wallet address
             amount: Transaction amount
             contract_hash: SHA-256 hash of the contract
             currency: Currency type (default: USDT)
@@ -88,7 +90,8 @@ class Black2Client:
             Transaction details including tx_id
         """
         payload = {
-            "to_address": seller_address,
+            "from_address": from_address,
+            "to_address": to_address,
             "amount": amount,
             "currency": currency,
             "contract_hash": contract_hash
